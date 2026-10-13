@@ -1,0 +1,19 @@
+[package]
+name = "tauri-plugin-sbrs-automation"
+version = "0.1.0"
+description = "Drive a Tauri app's webview from seleniumbase-rs (sbrs) tests: a W3C WebDriver endpoint inside the app, on macOS, Windows and Linux"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/MustCodeAl/tauri-plugin-sbrs-automation"
+links = "tauri-plugin-sbrs-automation"
+keywords = ["tauri", "webdriver", "testing", "automation", "seleniumbase"]
+
+[dependencies]
+tauri = { version = "=3.0.0-alpha.4", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tiny_http = "0.12"
+
+[build-dependencies]
+tauri-plugin = { version = "=3.0.0-alpha.3", features = ["build"] }

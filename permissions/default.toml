@@ -1,0 +1,5 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Lets the automation bridge in the webview send command results back to the plugin."
+permissions = ["allow-reply"]
