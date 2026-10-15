@@ -28,12 +28,12 @@ use std::time::Duration;
 
 use serde_json::Value;
 use tauri::plugin::TauriPlugin;
-use tauri::{AppHandle, Manager, Runtime, State};
+use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, State, WebviewWindow};
 
 mod server;
 pub mod webdriver;
 
-use webdriver::{Bridge, Driver, WebDriverError};
+use webdriver::{Bridge, Driver, WebDriverError, WindowCommand, WindowRect};
 
 /// The default port of the WebDriver endpoint.
 pub const DEFAULT_PORT: u16 = 4445;
@@ -171,13 +171,38 @@ struct TauriBridge<R: Runtime> {
     pending: Arc<Pending>,
 }
 
+impl<R: Runtime> TauriBridge<R> {
+    /// The window the endpoint drives: `main`, or else any.
+    fn driven_window(&self) -> Result<WebviewWindow<R>, WebDriverError> {
+        let mut windows = self.app.webview_windows();
+        windows
+            .remove("main")
+            .or_else(|| windows.into_values().next())
+            .ok_or_else(|| WebDriverError::new("no such window", "the app has no window"))
+    }
+}
+
+/// A window operation that failed, as a WebDriver error.
+fn window_error(error: tauri::Error) -> WebDriverError {
+    WebDriverError::new("unknown error", format!("the window refused: {error}"))
+}
+
+/// The window's outer rectangle in logical (CSS) pixels.
+fn outer_rect<R: Runtime>(window: &WebviewWindow<R>) -> tauri::Result<WindowRect> {
+    let scale = window.scale_factor()?;
+    let position = window.outer_position()?.to_logical::<f64>(scale);
+    let size = window.outer_size()?.to_logical::<f64>(scale);
+    Ok(WindowRect {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+    })
+}
+
 impl<R: Runtime> Bridge for TauriBridge<R> {
     fn call(&self, op: &str, args: Value, timeout: Duration) -> Result<Value, WebDriverError> {
-        let windows = self.app.webview_windows();
-        let window = windows
-            .get("main")
-            .or_else(|| windows.values().next())
-            .ok_or_else(|| WebDriverError::new("no such window", "the app has no window"))?;
+        let window = self.driven_window()?;
         let id = self.pending.next.fetch_add(1, Ordering::Relaxed);
         let (sender, answer) = mpsc::channel();
         self.pending
@@ -205,5 +230,42 @@ impl<R: Runtime> Bridge for TauriBridge<R> {
                 format!("the page did not answer `{op}` in time"),
             ))
         })
+    }
+
+    fn window(&self, command: WindowCommand) -> Result<WindowRect, WebDriverError> {
+        let window = self.driven_window()?;
+        match command {
+            WindowCommand::Rect => {}
+            WindowCommand::SetRect {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                let now = outer_rect(&window).map_err(window_error)?;
+                if x.is_some() || y.is_some() {
+                    let position = LogicalPosition::new(x.unwrap_or(now.x), y.unwrap_or(now.y));
+                    window.set_position(position).map_err(window_error)?;
+                }
+                if width.is_some() || height.is_some() {
+                    // Tauri sizes the inside of the window, WebDriver the
+                    // outside: take the frame off.
+                    let scale = window.scale_factor().map_err(window_error)?;
+                    let inner = window
+                        .inner_size()
+                        .map_err(window_error)?
+                        .to_logical::<f64>(scale);
+                    let size = LogicalSize::new(
+                        (width.unwrap_or(now.width) - (now.width - inner.width)).max(1.0),
+                        (height.unwrap_or(now.height) - (now.height - inner.height)).max(1.0),
+                    );
+                    window.set_size(size).map_err(window_error)?;
+                }
+            }
+            WindowCommand::Maximize => window.maximize().map_err(window_error)?,
+            WindowCommand::Minimize => window.minimize().map_err(window_error)?,
+            WindowCommand::Fullscreen => window.set_fullscreen(true).map_err(window_error)?,
+        }
+        outer_rect(&window).map_err(window_error)
     }
 }

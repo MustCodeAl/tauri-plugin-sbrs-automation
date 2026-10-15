@@ -19,7 +19,8 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_TIMEOUT: Duration = Duration::from_secs(2);
 const PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Runs one operation of the injected script in the webview.
+/// Runs one operation of the injected script in the webview, or asks the
+/// app's window.
 pub trait Bridge: Send + Sync {
     /// Runs `op` with `args` and returns its value, waiting at most `timeout`.
     ///
@@ -27,6 +28,59 @@ pub trait Bridge: Send + Sync {
     ///
     /// The WebDriver error the script reported, or `timeout`.
     fn call(&self, op: &str, args: Value, timeout: Duration) -> Result<Value, WebDriverError>;
+
+    /// Applies `command` to the app's window and returns the window's
+    /// rectangle afterwards. The page cannot answer this: WKWebView reports
+    /// `outerWidth` and `outerHeight` as 0.
+    ///
+    /// # Errors
+    ///
+    /// `no such window`, or what the window reported. The default answers
+    /// `unsupported operation`.
+    fn window(&self, command: WindowCommand) -> Result<WindowRect, WebDriverError> {
+        let _ = command;
+        Err(WebDriverError::new(
+            "unsupported operation",
+            "this bridge has no window",
+        ))
+    }
+}
+
+/// What a window command asks of the app's window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WindowCommand {
+    /// Only report the rectangle.
+    Rect,
+    /// Move and resize the window, in CSS pixels; `None` keeps that value.
+    SetRect {
+        /// The left edge of the window.
+        x: Option<f64>,
+        /// The top edge of the window.
+        y: Option<f64>,
+        /// The outer width of the window.
+        width: Option<f64>,
+        /// The outer height of the window.
+        height: Option<f64>,
+    },
+    /// Maximize the window.
+    Maximize,
+    /// Minimize the window.
+    Minimize,
+    /// Make the window full screen.
+    Fullscreen,
+}
+
+/// The app window's outer rectangle in CSS pixels, as WebDriver reports it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowRect {
+    /// The left edge.
+    pub x: f64,
+    /// The top edge.
+    pub y: f64,
+    /// The outer width.
+    pub width: f64,
+    /// The outer height.
+    pub height: f64,
 }
 
 /// A WebDriver error: its code (such as `no such element`) and a message.
@@ -183,7 +237,7 @@ impl<B: Bridge> Driver<B> {
                 "browserName": "tauri",
                 "platformName": std::env::consts::OS,
                 "acceptInsecureCerts": false,
-                "setWindowRect": false,
+                "setWindowRect": true,
                 "timeouts": timeouts(),
             },
         }))
@@ -238,10 +292,11 @@ impl<B: Bridge> Driver<B> {
                     "the app has one window, `main`",
                 )),
             },
-            ("GET", ["window", "rect"])
-            | ("POST", ["window", "rect" | "maximize" | "minimize" | "fullscreen"]) => {
-                self.call("rect", json!({}))
-            }
+            ("GET", ["window", "rect"]) => self.window(WindowCommand::Rect),
+            ("POST", ["window", "rect"]) => self.window(set_rect(body)?),
+            ("POST", ["window", "maximize"]) => self.window(WindowCommand::Maximize),
+            ("POST", ["window", "minimize"]) => self.window(WindowCommand::Minimize),
+            ("POST", ["window", "fullscreen"]) => self.window(WindowCommand::Fullscreen),
             ("POST", ["element"]) => self.find(None, body, false),
             ("POST", ["elements"]) => self.find(None, body, true),
             ("GET", ["element", "active"]) => self.call("active", json!({})),
@@ -298,6 +353,19 @@ impl<B: Bridge> Driver<B> {
         }
     }
 
+    fn window(&self, command: WindowCommand) -> Result<Value, WebDriverError> {
+        let rect = self.bridge.window(command)?;
+        // W3C reports whole pixels, and clients read integers (thirtyfour's
+        // `Rect` holds `i64`), while a scale factor such as 1.5 gives fractions.
+        let whole = |value: f64| value.round() as i64;
+        Ok(json!({
+            "x": whole(rect.x),
+            "y": whole(rect.y),
+            "width": whole(rect.width),
+            "height": whole(rect.height),
+        }))
+    }
+
     fn find(&self, root: Option<&str>, body: &Value, all: bool) -> Result<Value, WebDriverError> {
         self.call(
             "find",
@@ -326,6 +394,33 @@ impl<B: Bridge> Driver<B> {
             "the page did not finish loading",
         ))
     }
+}
+
+/// The Set Window Rect body: each of `x`, `y`, `width` and `height` is
+/// missing, `null` or an integer in the range W3C WebDriver allows.
+fn set_rect(body: &Value) -> Result<WindowCommand, WebDriverError> {
+    const LIMIT: f64 = 2_147_483_647.0;
+    let field = |key: &str, min: f64| -> Result<Option<f64>, WebDriverError> {
+        match body.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => value
+                .as_f64()
+                .filter(|number| (min..=LIMIT).contains(number))
+                .map(Some)
+                .ok_or_else(|| {
+                    WebDriverError::new(
+                        "invalid argument",
+                        format!("`{key}` must be null or a number from {min} to {LIMIT}"),
+                    )
+                }),
+        }
+    };
+    Ok(WindowCommand::SetRect {
+        x: field("x", -LIMIT - 1.0)?,
+        y: field("y", -LIMIT - 1.0)?,
+        width: field("width", 0.0)?,
+        height: field("height", 0.0)?,
+    })
 }
 
 fn timeouts() -> Value {
@@ -358,6 +453,7 @@ mod tests {
         calls: Mutex<Vec<(String, Value)>>,
         answers: Mutex<VecDeque<Result<Value, WebDriverError>>>,
         states: Mutex<VecDeque<Result<Value, WebDriverError>>>,
+        windows: Mutex<Vec<WindowCommand>>,
     }
 
     impl Fake {
@@ -393,6 +489,17 @@ mod tests {
                     .pop_front()
                     .unwrap_or(Ok(Value::Null))
             }
+        }
+
+        fn window(&self, command: WindowCommand) -> Result<WindowRect, WebDriverError> {
+            self.windows.lock().unwrap().push(command);
+            // A scale factor such as 1.5 gives fractions.
+            Ok(WindowRect {
+                x: 10.4,
+                y: 20.6,
+                width: 800.0,
+                height: 600.5,
+            })
         }
     }
 
@@ -553,6 +660,70 @@ mod tests {
         );
         assert_eq!(response.status, 200);
         assert_eq!(driver.bridge.calls.lock().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn the_window_rect_comes_from_the_native_window() {
+        // The page cannot tell: WKWebView reports outerWidth and outerHeight 0.
+        let driver = Driver::new(Fake::default(), "t0k");
+        let id = session(&driver);
+        let url = |command: &str| format!("/t0k/session/{id}/window/{command}");
+        let rect = driver.handle("GET", &url("rect"), None, b"");
+        // Whole pixels: W3C says integers, and clients read them as such.
+        assert_eq!(
+            rect.body["value"],
+            json!({ "x": 10, "y": 21, "width": 800, "height": 601 })
+        );
+        let set = driver.handle(
+            "POST",
+            &url("rect"),
+            None,
+            br#"{"x":5,"y":6,"width":640,"height":null}"#,
+        );
+        assert_eq!(set.status, 200);
+        for command in ["maximize", "minimize", "fullscreen"] {
+            assert_eq!(
+                driver.handle("POST", &url(command), None, b"{}").status,
+                200
+            );
+        }
+        assert_eq!(
+            *driver.bridge.windows.lock().unwrap(),
+            vec![
+                WindowCommand::Rect,
+                WindowCommand::SetRect {
+                    x: Some(5.0),
+                    y: Some(6.0),
+                    width: Some(640.0),
+                    height: None,
+                },
+                WindowCommand::Maximize,
+                WindowCommand::Minimize,
+                WindowCommand::Fullscreen,
+            ]
+        );
+        assert!(driver.bridge.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_window_rect_that_is_not_one_is_refused() {
+        let driver = Driver::new(Fake::default(), "t0k");
+        let id = session(&driver);
+        let url = format!("/t0k/session/{id}/window/rect");
+        for body in [
+            &br#"{"width":-1}"#[..],
+            br#"{"x":"left"}"#,
+            br#"{"height":1e300}"#,
+        ] {
+            let refused = driver.handle("POST", &url, None, body);
+            assert_eq!(
+                (refused.status, refused.body["value"]["error"].as_str()),
+                (400, Some("invalid argument")),
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
+        assert!(driver.bridge.windows.lock().unwrap().is_empty());
     }
 
     #[test]

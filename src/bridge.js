@@ -176,7 +176,6 @@
       }
       return null;
     },
-    rect: () => ({ x: screenX, y: screenY, width: outerWidth, height: outerHeight }),
     script: async ({ script, args, isAsync }) => {
       const run = new Function(script);
       const values = unwrap(args || []);
