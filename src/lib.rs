@@ -57,10 +57,11 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 pending,
             };
             let addr = SocketAddr::from(([127, 0, 0, 1], settings.port));
-            let local = server::spawn(addr, Driver::new(bridge, settings.token.clone()))?;
-            eprintln!(
-                "tauri-plugin-sbrs-automation: WebDriver at http://{local}/{}",
-                settings.token
+            // A port in use is reported, not fatal: the app keeps running.
+            server::start(
+                addr,
+                Driver::new(bridge, settings.token.clone()),
+                &settings.token,
             );
             Ok(())
         });

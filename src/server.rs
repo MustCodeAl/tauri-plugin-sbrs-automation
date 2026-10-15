@@ -9,6 +9,39 @@ use crate::webdriver::{Bridge, Driver};
 /// Bodies larger than this are cut (WebDriver bodies are small).
 const MAX_BODY: u64 = 16 * 1024 * 1024;
 
+/// The server URL to give a WebDriver client. It ends with `/`: clients join
+/// each command path (`session`, ...) to it as a relative URL, which would
+/// replace a last segment, the token, that has no slash after it.
+pub fn endpoint_url(local: SocketAddr, token: &str) -> String {
+    format!("http://{local}/{token}/")
+}
+
+/// Serves `driver` on `addr` (see [`spawn`]) and says on stderr where, or why
+/// not. A port that cannot be bound leaves the app running without the
+/// endpoint: the plugin is on in every debug build, so a second instance of
+/// the app, or a Selenium container on the same port, must not stop the app.
+pub fn start<B: Bridge + 'static>(
+    addr: SocketAddr,
+    driver: Driver<B>,
+    token: &str,
+) -> Option<SocketAddr> {
+    match spawn(addr, driver) {
+        Ok(local) => {
+            eprintln!(
+                "tauri-plugin-sbrs-automation: WebDriver at {}",
+                endpoint_url(local, token)
+            );
+            Some(local)
+        }
+        Err(error) => {
+            eprintln!(
+                "tauri-plugin-sbrs-automation: no WebDriver endpoint, cannot listen on {addr}: {error} (set SBRS_AUTOMATION_PORT to another port)"
+            );
+            None
+        }
+    }
+}
+
 /// Serves `driver` on `addr` from a thread of its own, one request at a time,
 /// and returns the address it listens on.
 ///
@@ -87,6 +120,35 @@ mod tests {
         let mut answer = String::new();
         stream.read_to_string(&mut answer).unwrap();
         answer
+    }
+
+    #[test]
+    fn a_port_in_use_leaves_the_app_without_an_endpoint_but_running() {
+        // The plugin is on in every debug build, so a second instance of the
+        // app, or a Selenium container on the same port, must not stop it.
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = taken.local_addr().unwrap();
+        assert_eq!(start(addr, Driver::new(Null, "abc"), "abc"), None);
+    }
+
+    #[test]
+    fn a_free_port_serves_and_says_where() {
+        let local = start(
+            "127.0.0.1:0".parse().unwrap(),
+            Driver::new(Null, "abc"),
+            "abc",
+        )
+        .unwrap();
+        let ok = get(local, "/abc/status", "");
+        assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
+    }
+
+    #[test]
+    fn the_endpoint_url_ends_with_a_slash() {
+        // Clients join command paths (`session`, ...) to it as relative URLs,
+        // which would replace a last segment, the token, that has no slash.
+        let url = endpoint_url("127.0.0.1:4445".parse().unwrap(), "abc");
+        assert_eq!(url, "http://127.0.0.1:4445/abc/");
     }
 
     #[test]
