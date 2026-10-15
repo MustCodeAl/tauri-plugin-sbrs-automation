@@ -30,10 +30,12 @@ use serde_json::Value;
 use tauri::plugin::TauriPlugin;
 use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, State, WebviewWindow};
 
+#[cfg(target_os = "macos")]
+mod screenshot;
 mod server;
 pub mod webdriver;
 
-use webdriver::{Bridge, Driver, WebDriverError, WindowCommand, WindowRect};
+use webdriver::{Bridge, Driver, ViewportRect, WebDriverError, WindowCommand, WindowRect};
 
 /// The default port of the WebDriver endpoint.
 pub const DEFAULT_PORT: u16 = 4445;
@@ -267,5 +269,19 @@ impl<R: Runtime> Bridge for TauriBridge<R> {
             WindowCommand::Fullscreen => window.set_fullscreen(true).map_err(window_error)?,
         }
         outer_rect(&window).map_err(window_error)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn screenshot(&self, area: Option<ViewportRect>) -> Result<String, WebDriverError> {
+        screenshot::take(&self.driven_window()?, area)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn screenshot(&self, area: Option<ViewportRect>) -> Result<String, WebDriverError> {
+        let _ = area;
+        Err(WebDriverError::new(
+            "unsupported operation",
+            "screenshots are taken on macOS only so far (WebView2 and WebKitGTK are not done)",
+        ))
     }
 }

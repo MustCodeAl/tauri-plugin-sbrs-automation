@@ -17,3 +17,14 @@ tiny_http = "0.12"
 
 [build-dependencies]
 tauri-plugin = { version = "=3.0.0-alpha.3", features = ["build"] }
+
+# Screenshots on macOS: WKWebView's own snapshot, encoded as PNG. Tauri
+# already builds these crates on macOS; only more of their features are used.
+[target.'cfg(target_os = "macos")'.dependencies]
+base64 = "0.22"
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSResponder", "NSView", "NSImage", "NSImageRep", "NSBitmapImageRep"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSError", "NSString"] }
+objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKSnapshotConfiguration"] }
