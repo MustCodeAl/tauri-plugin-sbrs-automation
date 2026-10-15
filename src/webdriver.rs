@@ -11,8 +11,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-/// The key WebDriver uses for an element reference.
-pub const ELEMENT_KEY: &str = "element-6066-11e4-a52f-4a20b6f6b6a0";
+/// The key WebDriver uses for an element reference (the W3C "web element
+/// identifier").
+pub const ELEMENT_KEY: &str = "element-6066-11e4-a52e-4f735466cecf";
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_TIMEOUT: Duration = Duration::from_secs(2);
@@ -403,6 +404,18 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned()
+    }
+
+    #[test]
+    fn elements_are_named_with_the_w3c_web_element_identifier() {
+        // Clients read an element only under this key (W3C WebDriver, "web
+        // element identifier"); any other is not an element to them.
+        assert_eq!(ELEMENT_KEY, "element-6066-11e4-a52e-4f735466cecf");
+        let script = include_str!("bridge.js");
+        assert!(
+            script.contains(&format!("const KEY = '{ELEMENT_KEY}';")),
+            "bridge.js names elements with another key"
+        );
     }
 
     #[test]

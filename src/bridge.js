@@ -3,7 +3,7 @@
 // Tauri's IPC (the plugin's `reply` command).
 (() => {
   if (window.__sbrs) return;
-  const KEY = 'element-6066-11e4-a52f-4a20b6f6b6a0';
+  const KEY = 'element-6066-11e4-a52e-4f735466cecf';
   const ENTER = '';
   const elements = new Map();
   let next = 0;
