@@ -1,13 +1,20 @@
 // Injected into every page of the app by tauri-plugin-sbrs-automation. Runs one
 // WebDriver operation at a time for the plugin and sends the result back over
 // Tauri's IPC (the plugin's `reply` command).
+//
+// It runs in the top page only and drives same-origin frames from there:
+// commands act on the frame entered last. Dialogs (alert, confirm, prompt) and
+// input (W3C actions) are simulated with page script and DOM events; the OS's
+// mouse and keyboard are never used.
 (() => {
-  if (window.__sbrs) return;
+  if (window.__sbrs || window !== window.top) return;
   const KEY = 'element-6066-11e4-a52e-4f735466cecf';
   const ENTER = '';
   const elements = new Map();
   let next = 0;
   let leaving = false;
+  // The frame elements entered, outermost first.
+  let frames = [];
   addEventListener('hashchange', () => { leaving = false; });
   addEventListener('popstate', () => { leaving = false; });
 
@@ -16,6 +23,15 @@
     error.code = code;
     throw error;
   };
+  // A frame's nodes belong to the frame's own realm, where `instanceof`
+  // against this page's classes is false: test the shape instead.
+  const isElement = (value) => value !== null && typeof value === 'object'
+    && value.nodeType === 1 && typeof value.tagName === 'string';
+  const isList = (value) => Array.isArray(value)
+    || ['[object NodeList]', '[object HTMLCollection]'].includes(Object.prototype.toString.call(value));
+  const isWindow = (value) => value !== null && typeof value === 'object' && value.window === value;
+  // The window of an element: a frame's, or this page's.
+  const viewOf = (element) => element.ownerDocument?.defaultView || window;
   const ref = (element) => {
     for (const [id, known] of elements) if (known === element) return id;
     const id = `e${++next}-${Math.random().toString(36).slice(2, 10)}`;
@@ -29,11 +45,9 @@
     return element;
   };
   const wrap = (value) => {
-    if (value instanceof Element) return { [KEY]: ref(value) };
-    if (value instanceof NodeList || value instanceof HTMLCollection || Array.isArray(value)) {
-      return Array.from(value, wrap);
-    }
-    if (value && typeof value === 'object' && !(value instanceof Window)) {
+    if (isElement(value)) return { [KEY]: ref(value) };
+    if (isList(value)) return Array.from(value, wrap);
+    if (value && typeof value === 'object' && !isWindow(value)) {
       const out = {};
       for (const key of Object.keys(value)) out[key] = wrap(value[key]);
       return out;
@@ -51,21 +65,26 @@
     return value;
   };
   const visible = (element) => {
-    const style = getComputedStyle(element);
+    const style = viewOf(element).getComputedStyle(element);
     if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
     const rect = element.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
   };
   // React and similar frameworks watch the native value setter, so use it.
-  const setValue = (element, value) => {
-    const proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
-      : element instanceof HTMLInputElement ? HTMLInputElement.prototype : null;
+  const setNative = (element, value) => {
+    const view = viewOf(element);
+    const proto = element instanceof view.HTMLTextAreaElement ? view.HTMLTextAreaElement.prototype
+      : element instanceof view.HTMLInputElement ? view.HTMLInputElement.prototype : null;
     const setter = proto && Object.getOwnPropertyDescriptor(proto, 'value')?.set;
     if (setter) setter.call(element, value);
     else if (element.isContentEditable) element.textContent = value;
     else element.value = value;
-    element.dispatchEvent(new Event('input', { bubbles: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const setValue = (element, value) => {
+    setNative(element, value);
+    const view = viewOf(element);
+    element.dispatchEvent(new view.Event('input', { bubbles: true }));
+    element.dispatchEvent(new view.Event('change', { bubbles: true }));
   };
   const find = (root, using, value, all) => {
     let found = [];
@@ -83,7 +102,8 @@
             ? a.innerText.trim() === value : a.innerText.includes(value)));
           break;
         case 'xpath': {
-          const result = document.evaluate(value, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+          const result = (root.ownerDocument || root)
+            .evaluate(value, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
           for (let i = 0; i < result.snapshotLength; i += 1) found.push(result.snapshotItem(i));
           break;
         }
@@ -94,15 +114,334 @@
       if (error.code) throw error;
       fail('invalid selector', String(error.message || error));
     }
-    found = found.filter((node) => node instanceof Element);
+    found = found.filter(isElement);
     if (all) return found.map((node) => ({ [KEY]: ref(node) }));
     if (!found.length) fail('no such element', `no element matches ${using} \`${value}\``);
     return { [KEY]: ref(found[0]) };
   };
   const leave = (go) => {
     leaving = true;
+    frames = [];
     setTimeout(go, 0);
     return null;
+  };
+
+  // Frames. Only a same-origin frame can be entered: the page script cannot
+  // reach into the document of another origin.
+  const frameDocument = (frame) => {
+    try {
+      return frame.contentDocument;
+    } catch {
+      return null;
+    }
+  };
+  // The window and document commands act on: the frame entered last, or
+  // this page.
+  const context = () => {
+    if (!frames.length) return { win: window, doc: document };
+    const frame = frames[frames.length - 1];
+    const doc = frame.isConnected ? frameDocument(frame) : null;
+    if (!doc || !doc.defaultView) {
+      fail('no such frame', 'the frame entered is gone or is no longer same-origin; switch to its parent or the top page');
+    }
+    return { win: doc.defaultView, doc };
+  };
+  // Where an element shows in the app's viewport, after it is scrolled into
+  // view and cut to the viewports it is in: the area of its screenshot.
+  const viewportRect = (element) => {
+    element.scrollIntoView({ block: 'center', inline: 'center' });
+    let { left, top, right, bottom } = element.getBoundingClientRect();
+    const clip = (view) => {
+      left = Math.max(left, 0);
+      top = Math.max(top, 0);
+      right = Math.min(right, view.innerWidth);
+      bottom = Math.min(bottom, view.innerHeight);
+    };
+    for (let view = viewOf(element); view !== window && view.frameElement; view = view.parent) {
+      clip(view);
+      const frame = view.frameElement;
+      const box = frame.getBoundingClientRect();
+      const dx = box.left + frame.clientLeft;
+      const dy = box.top + frame.clientTop;
+      left += dx;
+      right += dx;
+      top += dy;
+      bottom += dy;
+    }
+    clip(window);
+    if (right <= left || bottom <= top) fail('unable to capture screen', 'the element has no area in view');
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  };
+
+  // User prompts. A dialog cannot wait for the client (alert, confirm and
+  // prompt block the page), so it answers at once: with the next answer the
+  // client set before (accept or dismiss, and the text for a prompt), else
+  // alert is accepted and confirm and prompt are dismissed. The dialog stays
+  // recorded until the client accepts or dismisses it, which then only
+  // clears the record.
+  const dialogs = { open: null, answers: [], text: null };
+  const ask = (type, message, fallback) => {
+    const answer = dialogs.answers.shift() || { accept: type === 'alert', text: null };
+    dialogs.open = { type, text: message === undefined ? '' : String(message) };
+    if (type === 'alert') return undefined;
+    if (type === 'confirm') return answer.accept;
+    if (!answer.accept) return null;
+    if (answer.text !== null) return answer.text;
+    return fallback === undefined ? '' : String(fallback);
+  };
+  const HOOKED = Symbol('sbrs-automation dialogs');
+  // Replaces the dialogs of a window: this page's or a same-origin frame's.
+  const hookDialogs = (win) => {
+    try {
+      if (win[HOOKED]) return;
+      Object.defineProperty(win, HOOKED, { value: true });
+      win.alert = (message) => { ask('alert', message); };
+      win.confirm = (message) => ask('confirm', message);
+      win.prompt = (message, value) => ask('prompt', message, value);
+    } catch {
+      // A cross-origin frame keeps its own dialogs.
+    }
+  };
+  // Hooks the dialogs of the same-origin frames of a window, and of theirs.
+  const hookFrames = (win) => {
+    for (let index = 0; index < win.length; index += 1) {
+      const child = win[index];
+      let reachable = false;
+      try {
+        reachable = Boolean(child.document);
+      } catch {
+        // Cross-origin.
+      }
+      if (reachable) {
+        hookDialogs(child);
+        hookFrames(child);
+      }
+    }
+  };
+  hookDialogs(window);
+
+  // Input (W3C actions): one keyboard, and a mouse for each pointer source,
+  // as DOM events at the pointer's place in the current frame. Untrusted
+  // events do not apply CSS :hover and do not start HTML drag and drop.
+  const input = { keys: new Set(), pointers: new Map(), press: null };
+  // How soon a second press on the same element makes a double click.
+  const DOUBLE_CLICK_MS = 500;
+  const pointerOf = (source) => {
+    if (!input.pointers.has(source)) {
+      input.pointers.set(source, { x: 0, y: 0, over: null, buttons: new Set(), down: null });
+    }
+    return input.pointers.get(source);
+  };
+  const modifiers = () => ({
+    shiftKey: input.keys.has('Shift'),
+    ctrlKey: input.keys.has('Control'),
+    altKey: input.keys.has('Alt'),
+    metaKey: input.keys.has('Meta'),
+  });
+  // `MouseEvent.buttons` for the pressed W3C buttons (0 left, 1 middle,
+  // 2 right, 3 back, 4 forward).
+  const buttonMask = (pressed) => [...pressed].reduce((mask, button) => mask | [1, 4, 2, 8, 16][button], 0);
+  const NOT_BUBBLING = new Set(['mouseenter', 'mouseleave', 'pointerenter', 'pointerleave']);
+  const mouseEvent = (target, type, pointer, extra = {}) => {
+    const view = viewOf(target);
+    const bubbles = !NOT_BUBBLING.has(type);
+    const init = {
+      bubbles,
+      cancelable: bubbles,
+      composed: true,
+      view,
+      clientX: pointer.x,
+      clientY: pointer.y,
+      screenX: pointer.x,
+      screenY: pointer.y,
+      button: 0,
+      buttons: buttonMask(pointer.buttons),
+      ...modifiers(),
+      ...extra,
+    };
+    if (type.startsWith('pointer') && view.PointerEvent) {
+      return target.dispatchEvent(new view.PointerEvent(type, {
+        pointerId: 1, pointerType: 'mouse', isPrimary: true, ...init,
+      }));
+    }
+    return target.dispatchEvent(new view.MouseEvent(type, init));
+  };
+  // The element under the pointer, in the current frame.
+  const hit = (pointer) => {
+    const { doc } = context();
+    return doc.elementFromPoint(pointer.x, pointer.y) || doc.documentElement;
+  };
+  const movePointer = (pointer, { origin, x, y }) => {
+    const { win, doc } = context();
+    let left = x;
+    let top = y;
+    if (origin === 'pointer') {
+      left += pointer.x;
+      top += pointer.y;
+    } else if (origin !== 'viewport') {
+      const element = get(origin.element);
+      if (element.ownerDocument !== doc) fail('no such element', 'the element is not in the current frame');
+      let rect = element.getBoundingClientRect();
+      const centre = () => [rect.left + rect.width / 2, rect.top + rect.height / 2];
+      const [cx, cy] = centre();
+      if (cx < 0 || cy < 0 || cx > win.innerWidth || cy > win.innerHeight) {
+        element.scrollIntoView({ block: 'center', inline: 'center' });
+        rect = element.getBoundingClientRect();
+      }
+      const [ex, ey] = centre();
+      left += Math.floor(ex);
+      top += Math.floor(ey);
+    }
+    if (left < 0 || top < 0 || left > win.innerWidth || top > win.innerHeight) {
+      fail('move target out of bounds', `(${left}, ${top}) is outside the viewport, ${win.innerWidth} x ${win.innerHeight}`);
+    }
+    pointer.x = left;
+    pointer.y = top;
+    const target = hit(pointer);
+    const previous = pointer.over;
+    if (target !== previous) {
+      if (previous && previous.isConnected) {
+        for (const type of ['pointerout', 'pointerleave', 'mouseout', 'mouseleave']) {
+          mouseEvent(previous, type, pointer, { relatedTarget: target });
+        }
+      }
+      for (const type of ['pointerover', 'pointerenter', 'mouseover', 'mouseenter']) {
+        mouseEvent(target, type, pointer, { relatedTarget: previous });
+      }
+      pointer.over = target;
+    }
+    mouseEvent(target, 'pointermove', pointer);
+    mouseEvent(target, 'mousemove', pointer);
+  };
+  const FOCUSABLE = 'a[href], area[href], button, input, select, textarea, iframe, summary, [tabindex], '
+    + '[contenteditable]:not([contenteditable="false"])';
+  // A press focuses what it lands on, or what holds that, as a real one does.
+  const focusFrom = (target) => {
+    const focusable = target.closest(FOCUSABLE);
+    if (focusable && !focusable.disabled) focusable.focus({ preventScroll: true });
+    else target.ownerDocument.activeElement?.blur?.();
+  };
+  const pressPointer = (pointer, { button }) => {
+    if (pointer.buttons.has(button)) return;
+    const target = hit(pointer);
+    const now = performance.now();
+    const last = input.press;
+    const count = last && last.button === button && last.target === target
+      && now - last.time < DOUBLE_CLICK_MS ? last.count + 1 : 1;
+    input.press = { button, target, time: now, count };
+    pointer.buttons.add(button);
+    pointer.down = { button, target, count };
+    // A cancelled pointerdown holds back the mouse events that follow it.
+    if (mouseEvent(target, 'pointerdown', pointer, { button })
+      && mouseEvent(target, 'mousedown', pointer, { button, detail: count })) {
+      focusFrom(target);
+    }
+  };
+  // The nearest element that holds both `a` and `b`.
+  const commonAncestor = (a, b) => {
+    for (let node = a; node; node = node.parentElement) if (node.contains(b)) return node;
+    return null;
+  };
+  const releasePointer = (pointer, { button }) => {
+    if (!pointer.buttons.has(button)) return;
+    const target = hit(pointer);
+    const { down } = pointer;
+    const count = down ? down.count : 1;
+    pointer.buttons.delete(button);
+    pointer.down = null;
+    mouseEvent(target, 'pointerup', pointer, { button });
+    mouseEvent(target, 'mouseup', pointer, { button, detail: count });
+    const pressed = down && down.button === button && down.target.isConnected ? down.target : null;
+    const clicked = pressed && commonAncestor(pressed, target);
+    if (!clicked) return;
+    if (button === 0) {
+      mouseEvent(clicked, 'click', pointer, { button, detail: count });
+      if (count === 2) mouseEvent(clicked, 'dblclick', pointer, { button, detail: 2 });
+    } else {
+      mouseEvent(clicked, 'auxclick', pointer, { button, detail: count });
+      if (button === 2) mouseEvent(clicked, 'contextmenu', pointer, { button, detail: count });
+    }
+  };
+  // Key names of the WebDriver key codes (W3C "normalised key value").
+  const KEYS = {
+    '': 'Unidentified', '': 'Cancel', '': 'Help', '': 'Backspace',
+    '': 'Tab', '': 'Clear', '': 'Enter', [ENTER]: 'Enter', '': 'Shift',
+    '': 'Control', '': 'Alt', '': 'Pause', '': 'Escape', '': ' ',
+    '': 'PageUp', '': 'PageDown', '': 'End', '': 'Home',
+    '': 'ArrowLeft', '': 'ArrowUp', '': 'ArrowRight', '': 'ArrowDown',
+    '': 'Insert', '': 'Delete', '': ';', '': '=', '': '*',
+    '': '+', '': ',', '': '-', '': '.', '': '/', '': 'Meta',
+    '': 'Shift', '': 'Control', '': 'Alt', '': 'Meta', '': 'PageUp',
+    '': 'PageDown', '': 'End', '': 'Home', '': 'ArrowLeft',
+    '': 'ArrowUp', '': 'ArrowRight', '': 'ArrowDown', '': 'Insert',
+    '': 'Delete',
+  };
+  for (let digit = 0; digit <= 9; digit += 1) KEYS[String.fromCharCode(0xE01A + digit)] = String(digit);
+  for (let number = 1; number <= 12; number += 1) KEYS[String.fromCharCode(0xE030 + number)] = `F${number}`;
+  const CODES = { ' ': 'Space', Shift: 'ShiftLeft', Control: 'ControlLeft', Alt: 'AltLeft', Meta: 'MetaLeft' };
+  const codeOf = (key) => {
+    if (/^[a-z]$/i.test(key)) return `Key${key.toUpperCase()}`;
+    if (/^[0-9]$/.test(key)) return `Digit${key}`;
+    return CODES[key] || (key.length > 1 ? key : '');
+  };
+  const focused = () => {
+    const { doc } = context();
+    return doc.activeElement || doc.body;
+  };
+  const keyEvent = (target, type, key, repeat = false) => {
+    const view = viewOf(target);
+    return target.dispatchEvent(new view.KeyboardEvent(type, {
+      key, code: codeOf(key), bubbles: true, cancelable: true, composed: true, view, repeat, ...modifiers(),
+    }));
+  };
+  const NOT_TEXT = new Set(['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit']);
+  const editable = (element) => element.isContentEditable || element.localName === 'textarea'
+    || (element.localName === 'input' && !NOT_TEXT.has(element.type));
+  // Edits the focused field as typing does, through `execCommand`, so the
+  // page sees `beforeinput` and `input`; else sets its value at the end.
+  const edit = (target, command, text) => {
+    if (!editable(target) || target.readOnly || target.disabled) return;
+    if (target.ownerDocument.execCommand(command, false, text)) return;
+    if (target.isContentEditable) return;
+    const value = target.value ?? '';
+    if (command === 'insertText') setNative(target, value + text);
+    else if (command === 'delete') setNative(target, value.slice(0, -1));
+    else return;
+    target.dispatchEvent(new (viewOf(target).Event)('input', { bubbles: true }));
+  };
+  const enter = (target) => {
+    if (target.localName === 'textarea') edit(target, 'insertText', '\n');
+    else if (target.isContentEditable) edit(target, 'insertParagraph');
+    else if (target.localName === 'input') target.form?.requestSubmit?.();
+    else if (target.localName === 'button' || (target.localName === 'a' && target.href)) target.click();
+  };
+  const pressKey = ({ value }) => {
+    const key = KEYS[value] ?? value;
+    // A WebDriver code names a key; any other value is the text it types.
+    const text = KEYS[value] === undefined || key.length === 1 ? key : null;
+    const target = focused();
+    const repeat = input.keys.has(key);
+    input.keys.add(key);
+    if (!keyEvent(target, 'keydown', key, repeat)) return;
+    const { ctrlKey, metaKey } = modifiers();
+    if (text !== null && !ctrlKey && !metaKey) {
+      if (keyEvent(target, 'keypress', key)) edit(target, 'insertText', text);
+    } else if (key === 'Enter') {
+      if (keyEvent(target, 'keypress', key)) enter(target);
+    } else if (key === 'Backspace' || key === 'Delete') {
+      edit(target, key === 'Backspace' ? 'delete' : 'forwardDelete');
+    }
+  };
+  const releaseKey = ({ value }) => {
+    const key = KEYS[value] ?? value;
+    if (!input.keys.has(key)) return;
+    input.keys.delete(key);
+    keyEvent(focused(), 'keyup', key);
+  };
+  const forgetInput = () => {
+    input.keys.clear();
+    input.pointers.clear();
+    input.press = null;
   };
 
   const ops = {
@@ -110,12 +449,14 @@
       switch (what) {
         case 'url': return location.href;
         case 'title': return document.title;
-        case 'source': return document.documentElement.outerHTML;
+        case 'source': return context().doc.documentElement.outerHTML;
         case 'ready': return leaving ? 'leaving' : document.readyState;
         default: return fail('invalid argument', what);
       }
     },
     go: ({ url }) => {
+      // A navigation leaves any frame for the top page.
+      frames = [];
       const target = new URL(url, location.href);
       const here = new URL(location.href);
       target.hash = '';
@@ -131,8 +472,11 @@
       if (action === 'refresh') location.reload();
       else history[action]();
     }),
-    find: ({ using, value, root, all }) => find(root ? get(root) : document, using, value, all),
-    active: () => ({ [KEY]: ref(document.activeElement || document.body) }),
+    find: ({ using, value, root, all }) => find(root ? get(root) : context().doc, using, value, all),
+    active: () => {
+      const { doc } = context();
+      return { [KEY]: ref(doc.activeElement || doc.body) };
+    },
     prop: ({ id, what, name }) => {
       const element = get(id);
       switch (what) {
@@ -140,14 +484,16 @@
         case 'name': return element.tagName.toLowerCase();
         case 'attribute': return element.getAttribute(name);
         case 'property': return wrap(element[name]);
-        case 'css': return getComputedStyle(element).getPropertyValue(name);
+        case 'css': return viewOf(element).getComputedStyle(element).getPropertyValue(name);
         case 'enabled': return !element.disabled;
         case 'selected': return Boolean(element.checked || element.selected);
         case 'displayed': return visible(element);
         case 'rect': {
           const rect = element.getBoundingClientRect();
-          return { x: rect.x + scrollX, y: rect.y + scrollY, width: rect.width, height: rect.height };
+          const view = viewOf(element);
+          return { x: rect.x + view.scrollX, y: rect.y + view.scrollY, width: rect.width, height: rect.height };
         }
+        case 'viewrect': return viewportRect(element);
         default: return fail('unknown command', what);
       }
     },
@@ -169,6 +515,7 @@
       const parts = text.split(ENTER);
       setValue(element, (element.value ?? element.textContent ?? '') + parts.join(''));
       if (parts.length > 1) {
+        const { KeyboardEvent } = viewOf(element);
         for (const type of ['keydown', 'keypress', 'keyup']) {
           element.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', bubbles: true }));
         }
@@ -176,11 +523,97 @@
       }
       return null;
     },
+    // A script runs in the current frame: its `window` and `document`.
     script: async ({ script, args, isAsync }) => {
-      const run = new Function(script);
+      const { win } = context();
+      const run = new win.Function(script);
       const values = unwrap(args || []);
-      if (!isAsync) return wrap(await run.apply(window, values));
-      return wrap(await new Promise((resolve) => run.apply(window, [...values, resolve])));
+      if (!isAsync) return wrap(await run.apply(win, values));
+      return wrap(await new Promise((resolve) => run.apply(win, [...values, resolve])));
+    },
+    dialog: ({ action, text }) => {
+      const { open } = dialogs;
+      if (action === 'text') {
+        if (!open) fail('no such alert', 'no dialog has opened since the last accept or dismiss');
+        return open.text;
+      }
+      if (action === 'type') {
+        if (open && open.type !== 'prompt') fail('element not interactable', `a ${open.type} takes no text`);
+        if (open) {
+          fail('unsupported operation', 'the prompt was answered when it opened: send its text and accept before it opens');
+        }
+        dialogs.text = String(text);
+        return null;
+      }
+      // Before a dialog, accept or dismiss is the answer for the next one;
+      // after it, they clear the record.
+      if (open) dialogs.open = null;
+      else dialogs.answers.push({ accept: action === 'accept', text: dialogs.text });
+      dialogs.text = null;
+      return null;
+    },
+    frame: ({ top, parent, index, element }) => {
+      if (top) {
+        frames = [];
+        return null;
+      }
+      if (parent) {
+        frames.pop();
+        return null;
+      }
+      const { win, doc } = context();
+      let frame;
+      if (element !== undefined) {
+        frame = get(element);
+        if (!['iframe', 'frame'].includes(frame.localName)) fail('no such frame', 'the element is not a frame');
+        if (frame.ownerDocument !== doc) fail('no such frame', 'the frame element is not in the current frame');
+      } else {
+        const child = index < win.length ? win[index] : null;
+        if (!child) fail('no such frame', `the current page has ${win.length} frames, none at index ${index}`);
+        frame = [...doc.querySelectorAll('iframe, frame')].find((candidate) => candidate.contentWindow === child);
+        if (!frame) fail('no such frame', `frame ${index} is not an iframe or frame element`);
+      }
+      if (!frameDocument(frame)) {
+        fail('no such frame', 'the frame is cross-origin: only a frame of the same origin as the app\'s page can be entered, since the page script cannot reach into another origin');
+      }
+      frames.push(frame);
+      hookDialogs(frame.contentWindow);
+      return null;
+    },
+    input: ({ actions }) => {
+      for (const action of actions) {
+        switch (action.type) {
+          case 'pointerMove': movePointer(pointerOf(action.source), action); break;
+          case 'pointerDown': pressPointer(pointerOf(action.source), action); break;
+          case 'pointerUp': releasePointer(pointerOf(action.source), action); break;
+          case 'keyDown': pressKey(action); break;
+          case 'keyUp': releaseKey(action); break;
+          default: fail('unsupported operation', `\`${action.type}\` is not simulated`);
+        }
+      }
+      return null;
+    },
+    // Lets go of the keys and buttons held, last pressed first, then forgets
+    // the input state.
+    release: () => {
+      try {
+        for (const key of [...input.keys].reverse()) releaseKey({ value: key });
+        for (const pointer of input.pointers.values()) {
+          for (const button of [...pointer.buttons].reverse()) releasePointer(pointer, { button });
+        }
+      } finally {
+        forgetInput();
+      }
+      return null;
+    },
+    // A new session: the top page, no dialog answers, no input held.
+    reset: () => {
+      frames = [];
+      dialogs.open = null;
+      dialogs.answers = [];
+      dialogs.text = null;
+      forgetInput();
+      return null;
     },
   };
 
@@ -190,6 +623,8 @@
       run: async (id, op, args) => {
         try {
           if (!Object.hasOwn(ops, op)) fail('unknown command', op);
+          // Frames load on their own; hook the dialogs of any new one.
+          hookFrames(window);
           const value = await ops[op](args || {});
           await reply({ id, ok: true, value: value === undefined ? null : value });
         } catch (error) {

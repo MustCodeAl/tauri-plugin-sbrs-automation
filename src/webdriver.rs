@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+mod actions;
+
 /// The key WebDriver uses for an element reference (the W3C "web element
 /// identifier").
 pub const ELEMENT_KEY: &str = "element-6066-11e4-a52e-4f735466cecf";
@@ -46,6 +48,35 @@ pub trait Bridge: Send + Sync {
             "this bridge has no window",
         ))
     }
+
+    /// Takes a screenshot of the webview, of `area` of it when given, and
+    /// returns it as a base64-encoded PNG.
+    ///
+    /// # Errors
+    ///
+    /// What the webview reported. The default answers `unsupported
+    /// operation`.
+    fn screenshot(&self, area: Option<ViewportRect>) -> Result<String, WebDriverError> {
+        let _ = area;
+        Err(WebDriverError::new(
+            "unsupported operation",
+            "this bridge takes no screenshots",
+        ))
+    }
+}
+
+/// A rectangle of the webview in CSS pixels, from the top left corner of its
+/// viewport.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewportRect {
+    /// The left edge.
+    pub x: f64,
+    /// The top edge.
+    pub y: f64,
+    /// The width.
+    pub width: f64,
+    /// The height.
+    pub height: f64,
 }
 
 /// What a window command asks of the app's window.
@@ -114,6 +145,7 @@ impl WebDriverError {
             "no such element"
             | "no such window"
             | "no such frame"
+            | "no such alert"
             | "stale element reference"
             | "invalid session id"
             | "unknown command" => 404,
@@ -228,6 +260,14 @@ impl<B: Bridge> Driver<B> {
             WebDriverError::new(
                 "session not created",
                 "the app's window did not load its page in time",
+            )
+        })?;
+        // A session starts in the top page, with no frame entered, no
+        // dialog answer and no key or button held from the last session.
+        self.call("reset", json!({})).map_err(|error| {
+            WebDriverError::new(
+                "session not created",
+                format!("the page could not be reset: {}", error.message),
             )
         })?;
         let number = self.sessions.fetch_add(1, Ordering::Relaxed) + 1;
@@ -360,11 +400,24 @@ impl<B: Bridge> Driver<B> {
                 "args": body.get("args").cloned().unwrap_or_else(|| json!([])),
                 "isAsync": *kind == "async",
             })),
-            ("GET", ["screenshot"]) | ("GET", ["element", _, "screenshot"]) => {
-                Err(WebDriverError::new(
-                    "unsupported operation",
-                    "screenshots of a Tauri webview are not supported yet",
-                ))
+            ("GET", ["alert", "text"]) => self.call("dialog", json!({ "action": "text" })),
+            ("POST", ["alert", action @ ("accept" | "dismiss")]) => {
+                self.call("dialog", json!({ "action": action }))
+            }
+            ("POST", ["alert", "text"]) => self.call(
+                "dialog",
+                json!({ "action": "type", "text": text(body, "text")? }),
+            ),
+            ("POST", ["frame"]) => self.call("frame", frame_target(body)?),
+            ("POST", ["frame", "parent"]) => self.call("frame", json!({ "parent": true })),
+            ("POST", ["actions"]) => self.perform(body),
+            ("DELETE", ["actions"]) => self.call("release", json!({})),
+            ("GET", ["screenshot"]) => self.bridge.screenshot(None).map(Value::from),
+            ("GET", ["element", id, "screenshot"]) => {
+                let area = self.call("prop", json!({ "id": id, "what": "viewrect" }))?;
+                self.bridge
+                    .screenshot(Some(viewport_rect(&area)?))
+                    .map(Value::from)
             }
             _ => Err(unknown(method, &command.join("/"))),
         }
@@ -381,6 +434,21 @@ impl<B: Bridge> Driver<B> {
             "width": whole(rect.width),
             "height": whole(rect.height),
         }))
+    }
+
+    /// Performs W3C actions tick by tick: the page dispatches a tick's input
+    /// at once, and the tick then lasts as long as its longest pause or move.
+    /// The whole sequence is checked before anything runs.
+    fn perform(&self, body: &Value) -> Result<Value, WebDriverError> {
+        for tick in actions::ticks(body)? {
+            if !tick.inputs.is_empty() {
+                self.call("input", json!({ "actions": tick.inputs }))?;
+            }
+            if !tick.duration.is_zero() {
+                std::thread::sleep(tick.duration);
+            }
+        }
+        Ok(Value::Null)
     }
 
     /// Runs a script for as long as the session's script timeout allows.
@@ -468,6 +536,45 @@ fn set_rect(body: &Value) -> Result<WindowCommand, WebDriverError> {
     })
 }
 
+/// The frame Switch To Frame names, for the page: `null` for the top page,
+/// an index into the current frame's frames, or a frame element.
+fn frame_target(body: &Value) -> Result<Value, WebDriverError> {
+    match body.get("id") {
+        Some(Value::Null) => Ok(json!({ "top": true })),
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .filter(|index| *index <= u64::from(u16::MAX))
+            .map(|index| json!({ "index": index }))
+            .ok_or_else(|| invalid("a frame index is a whole number from 0 to 65535")),
+        Some(Value::Object(reference)) => reference
+            .get(ELEMENT_KEY)
+            .and_then(Value::as_str)
+            .map(|id| json!({ "element": id }))
+            .ok_or_else(|| invalid("`id` is an object but not an element reference")),
+        _ => Err(invalid(
+            "`id` must be null, a frame index or a frame element",
+        )),
+    }
+}
+
+/// The rectangle the page gave for an element screenshot.
+fn viewport_rect(value: &Value) -> Result<ViewportRect, WebDriverError> {
+    let field = |key: &str| {
+        value.get(key).and_then(Value::as_f64).ok_or_else(|| {
+            WebDriverError::new(
+                "unknown error",
+                "the page gave no rectangle for the element",
+            )
+        })
+    };
+    Ok(ViewportRect {
+        x: field("x")?,
+        y: field("y")?,
+        width: field("width")?,
+        height: field("height")?,
+    })
+}
+
 /// A session's timeouts in milliseconds (the W3C `timeouts` object).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Timeouts {
@@ -535,6 +642,14 @@ fn text<'a>(body: &'a Value, key: &str) -> Result<&'a str, WebDriverError> {
         .ok_or_else(|| WebDriverError::new("invalid argument", format!("`{key}` is missing")))
 }
 
+fn invalid(message: impl Into<String>) -> WebDriverError {
+    WebDriverError::new("invalid argument", message)
+}
+
+fn unsupported(message: impl Into<String>) -> WebDriverError {
+    WebDriverError::new("unsupported operation", message)
+}
+
 fn unknown(method: &str, path: &str) -> WebDriverError {
     WebDriverError::new(
         "unknown command",
@@ -548,8 +663,8 @@ mod tests {
     use std::collections::VecDeque;
 
     /// Records each operation. The page's load state (`info` `ready`) comes
-    /// from `states` (`complete` when empty), every other answer from
-    /// `answers` (`null` when empty).
+    /// from `states` (`complete` when empty), `reset` answers `null`, and
+    /// every other answer comes from `answers` (`null` when empty).
     #[derive(Default)]
     struct Fake {
         calls: Mutex<Vec<(String, Value)>>,
@@ -558,6 +673,30 @@ mod tests {
         windows: Mutex<Vec<WindowCommand>>,
         /// How long each call was allowed to take.
         waits: Mutex<Vec<Duration>>,
+        /// The area of each screenshot taken (`None` for the whole view).
+        shots: Mutex<Vec<Option<ViewportRect>>>,
+    }
+
+    /// What the fake bridge answers for a screenshot.
+    const PNG: &str = "iVBORw0KGgo=";
+
+    /// A bridge that only runs operations: it has no window and takes no
+    /// screenshots.
+    struct Bare;
+
+    impl Bridge for Bare {
+        fn call(
+            &self,
+            op: &str,
+            _args: Value,
+            _timeout: Duration,
+        ) -> Result<Value, WebDriverError> {
+            Ok(if op == "info" {
+                json!("complete")
+            } else {
+                Value::Null
+            })
+        }
     }
 
     impl Fake {
@@ -587,6 +726,8 @@ mod tests {
                     .unwrap()
                     .pop_front()
                     .unwrap_or_else(|| Ok(json!("complete")))
+            } else if op == "reset" {
+                Ok(Value::Null)
             } else {
                 self.answers
                     .lock()
@@ -594,6 +735,11 @@ mod tests {
                     .pop_front()
                     .unwrap_or(Ok(Value::Null))
             }
+        }
+
+        fn screenshot(&self, area: Option<ViewportRect>) -> Result<String, WebDriverError> {
+            self.shots.lock().unwrap().push(area);
+            Ok(PNG.to_owned())
         }
 
         fn window(&self, command: WindowCommand) -> Result<WindowRect, WebDriverError> {
@@ -628,6 +774,20 @@ mod tests {
             script.contains(&format!("const KEY = '{ELEMENT_KEY}';")),
             "bridge.js names elements with another key"
         );
+    }
+
+    #[test]
+    fn the_page_script_serves_every_operation_the_driver_asks_for() {
+        let script = include_str!("bridge.js");
+        for op in [
+            "info", "go", "history", "find", "active", "prop", "click", "clear", "keys", "script",
+            "dialog", "frame", "input", "release", "reset",
+        ] {
+            assert!(
+                script.contains(&format!("\n    {op}: ")),
+                "bridge.js has no `{op}` operation"
+            );
+        }
     }
 
     #[test]
@@ -739,12 +899,15 @@ mod tests {
         assert_eq!(response.status, 200);
         assert!(response.body["value"]["sessionId"].is_string());
         let calls = driver.bridge.calls.lock().unwrap();
-        assert_eq!(calls.len(), 3);
+        assert_eq!(calls.len(), 4);
         assert!(
-            calls
+            calls[..3]
                 .iter()
                 .all(|(op, args)| op == "info" && args == &json!({ "what": "ready" }))
         );
+        // Then the page forgets the last session's frame, dialog answers and
+        // pressed keys: a session starts in the top page.
+        assert_eq!(calls[3], ("reset".to_owned(), json!({})));
     }
 
     #[test]
@@ -950,17 +1113,345 @@ mod tests {
 
     #[test]
     fn unsupported_and_unknown_commands_say_so() {
-        let driver = Driver::new(Fake::default(), "t0k");
-        let id = session(&driver);
+        // A bridge that cannot take screenshots (the default) says so.
+        let driver = Driver::new(Bare, "t0k");
+        let started = driver.handle("POST", "/t0k/session", None, b"{}");
+        let id = started.body["value"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let shot = driver.handle("GET", &format!("/t0k/session/{id}/screenshot"), None, b"");
         assert_eq!(
             (shot.status, shot.body["value"]["error"].as_str()),
             (500, Some("unsupported operation"))
         );
-        let alert = driver.handle("GET", &format!("/t0k/session/{id}/alert/text"), None, b"");
+        let cookies = driver.handle("GET", &format!("/t0k/session/{id}/cookie"), None, b"");
         assert_eq!(
-            (alert.status, alert.body["value"]["error"].as_str()),
+            (cookies.status, cookies.body["value"]["error"].as_str()),
             (404, Some("unknown command"))
+        );
+    }
+
+    #[test]
+    fn user_prompts_are_answered_by_the_page() {
+        let driver = Driver::new(
+            Fake::answering(vec![
+                Ok(json!("Delete it?")),
+                Err(WebDriverError::new("no such alert", "no dialog is open")),
+            ]),
+            "t0k",
+        );
+        let id = session(&driver);
+        let url = |path: &str| format!("/t0k/session/{id}/alert/{path}");
+        let open = driver.handle("GET", &url("text"), None, b"");
+        assert_eq!(open.body["value"], "Delete it?");
+        let none = driver.handle("GET", &url("text"), None, b"");
+        assert_eq!(
+            (none.status, none.body["value"]["error"].as_str()),
+            (404, Some("no such alert"))
+        );
+        for (path, body) in [
+            ("accept", &b"{}"[..]),
+            ("dismiss", b"{}"),
+            ("text", br#"{"text":"Bob"}"#),
+        ] {
+            assert_eq!(driver.handle("POST", &url(path), None, body).status, 200);
+        }
+        let no_text = driver.handle("POST", &url("text"), None, b"{}");
+        assert_eq!(
+            (no_text.status, no_text.body["value"]["error"].as_str()),
+            (400, Some("invalid argument"))
+        );
+        let dialog = |args: Value| ("dialog".to_owned(), args);
+        assert_eq!(
+            *driver.bridge.calls.lock().unwrap(),
+            vec![
+                dialog(json!({ "action": "text" })),
+                dialog(json!({ "action": "text" })),
+                dialog(json!({ "action": "accept" })),
+                dialog(json!({ "action": "dismiss" })),
+                dialog(json!({ "action": "type", "text": "Bob" })),
+            ]
+        );
+    }
+
+    #[test]
+    fn frames_are_entered_by_index_or_element_and_left_for_the_parent_or_top() {
+        let driver = Driver::new(
+            Fake::answering(vec![
+                Ok(Value::Null),
+                Ok(Value::Null),
+                Ok(Value::Null),
+                Ok(Value::Null),
+                Err(WebDriverError::new("no such frame", "cross-origin")),
+            ]),
+            "t0k",
+        );
+        let id = session(&driver);
+        let url = format!("/t0k/session/{id}/frame");
+        let element = serde_json::to_vec(&json!({ "id": { ELEMENT_KEY: "e7" } })).unwrap();
+        for body in [&br#"{"id":2}"#[..], &element, br#"{"id":null}"#] {
+            assert_eq!(driver.handle("POST", &url, None, body).status, 200);
+        }
+        let parent = driver.handle("POST", &format!("{url}/parent"), None, b"{}");
+        assert_eq!(parent.status, 200);
+        let foreign = driver.handle("POST", &url, None, br#"{"id":0}"#);
+        assert_eq!(
+            (foreign.status, foreign.body["value"]["error"].as_str()),
+            (404, Some("no such frame"))
+        );
+        let frame = |args: Value| ("frame".to_owned(), args);
+        assert_eq!(
+            *driver.bridge.calls.lock().unwrap(),
+            vec![
+                frame(json!({ "index": 2 })),
+                frame(json!({ "element": "e7" })),
+                frame(json!({ "top": true })),
+                frame(json!({ "parent": true })),
+                frame(json!({ "index": 0 })),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_frame_that_is_not_one_is_refused() {
+        let driver = Driver::new(Fake::default(), "t0k");
+        let id = session(&driver);
+        let url = format!("/t0k/session/{id}/frame");
+        for body in [
+            &b"{}"[..],
+            br#"{"id":-1}"#,
+            br#"{"id":65536}"#,
+            br#"{"id":1.5}"#,
+            br#"{"id":"main"}"#,
+            br#"{"id":{"not-an-element":"e1"}}"#,
+        ] {
+            let refused = driver.handle("POST", &url, None, body);
+            assert_eq!(
+                (refused.status, refused.body["value"]["error"].as_str()),
+                (400, Some("invalid argument")),
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
+        assert!(driver.bridge.calls.lock().unwrap().is_empty());
+    }
+
+    /// The body thirtyfour 0.37 sends for `double_click_element`: the key
+    /// source only pauses, the mouse moves onto the element and clicks twice.
+    fn double_click(move_ms: u64) -> Vec<u8> {
+        let pause = json!({ "type": "pause", "duration": 0 });
+        let down = json!({ "type": "pointerDown", "button": 0, "duration": 0 });
+        let up = json!({ "type": "pointerUp", "button": 0, "duration": 0 });
+        let onto = json!({ "type": "pointerMove", "duration": move_ms, "origin": { ELEMENT_KEY: "e1" }, "x": 0, "y": 0 });
+        serde_json::to_vec(&json!({ "actions": [
+            { "id": "key", "type": "key", "actions": [pause, pause, pause, pause, pause] },
+            {
+                "id": "pointer",
+                "type": "pointer",
+                "parameters": { "pointerType": "mouse" },
+                "actions": [onto, down, up, down, up],
+            },
+        ] }))
+        .unwrap()
+    }
+
+    #[test]
+    fn actions_run_tick_by_tick_and_each_tick_lasts_its_longest_move_or_pause() {
+        let driver = Driver::new(Fake::default(), "t0k");
+        let id = session(&driver);
+        let started = Instant::now();
+        let done = driver.handle(
+            "POST",
+            &format!("/t0k/session/{id}/actions"),
+            None,
+            &double_click(120),
+        );
+        assert_eq!(done.status, 200, "{}", done.body);
+        assert!(started.elapsed() >= Duration::from_millis(120));
+        let input = |action: Value| ("input".to_owned(), json!({ "actions": [action] }));
+        let down = json!({ "source": "pointer", "type": "pointerDown", "button": 0 });
+        let up = json!({ "source": "pointer", "type": "pointerUp", "button": 0 });
+        assert_eq!(
+            *driver.bridge.calls.lock().unwrap(),
+            vec![
+                input(json!({
+                    "source": "pointer",
+                    "type": "pointerMove",
+                    "origin": { "element": "e1" },
+                    "x": 0,
+                    "y": 0,
+                })),
+                input(down.clone()),
+                input(up.clone()),
+                input(down),
+                input(up),
+            ]
+        );
+    }
+
+    #[test]
+    fn key_actions_go_to_the_page_and_a_pause_alone_does_not() {
+        let driver = Driver::new(Fake::default(), "t0k");
+        let id = session(&driver);
+        let body = json!({ "actions": [
+            { "id": "keyboard", "type": "key", "actions": [
+                { "type": "keyDown", "value": "a" },
+                { "type": "keyUp", "value": "a" },
+                { "type": "pause", "duration": 60 },
+                { "type": "keyDown", "value": "\u{E007}" },
+                { "type": "keyUp", "value": "\u{E007}" },
+            ] },
+            { "id": "idle", "type": "none", "actions": [{ "type": "pause" }] },
+        ] });
+        let started = Instant::now();
+        let done = driver.handle(
+            "POST",
+            &format!("/t0k/session/{id}/actions"),
+            None,
+            &serde_json::to_vec(&body).unwrap(),
+        );
+        assert_eq!(done.status, 200, "{}", done.body);
+        assert!(started.elapsed() >= Duration::from_millis(60));
+        let key = |kind: &str, value: &str| {
+            (
+                "input".to_owned(),
+                json!({ "actions": [{ "source": "keyboard", "type": kind, "value": value }] }),
+            )
+        };
+        assert_eq!(
+            *driver.bridge.calls.lock().unwrap(),
+            vec![
+                key("keyDown", "a"),
+                key("keyUp", "a"),
+                key("keyDown", "\u{E007}"),
+                key("keyUp", "\u{E007}"),
+            ]
+        );
+    }
+
+    #[test]
+    fn actions_that_are_not_simulated_are_unsupported_and_nothing_runs() {
+        let driver = Driver::new(Fake::default(), "t0k");
+        let id = session(&driver);
+        for source in [
+            json!({ "id": "wheel", "type": "wheel", "actions": [
+                { "type": "scroll", "x": 0, "y": 0, "deltaX": 0, "deltaY": 50 },
+            ] }),
+            json!({ "id": "finger", "type": "pointer", "parameters": { "pointerType": "touch" },
+                "actions": [{ "type": "pointerDown", "button": 0 }] }),
+            json!({ "id": "mouse", "type": "pointer", "actions": [{ "type": "pointerCancel" }] }),
+        ] {
+            // A good source comes first: nothing runs when any is refused.
+            let body = json!({ "actions": [
+                { "id": "keyboard", "type": "key", "actions": [{ "type": "keyDown", "value": "a" }] },
+                source,
+            ] });
+            let refused = driver.handle(
+                "POST",
+                &format!("/t0k/session/{id}/actions"),
+                None,
+                &serde_json::to_vec(&body).unwrap(),
+            );
+            assert_eq!(
+                (refused.status, refused.body["value"]["error"].as_str()),
+                (500, Some("unsupported operation")),
+                "{body}"
+            );
+        }
+        assert!(driver.bridge.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn actions_that_are_not_ones_are_refused() {
+        let driver = Driver::new(Fake::default(), "t0k");
+        let id = session(&driver);
+        let sequence = |source: Value| json!({ "actions": [source] });
+        for body in [
+            json!({}),
+            sequence(json!({ "type": "key", "actions": [] })),
+            sequence(json!({ "id": "x", "type": "joystick", "actions": [] })),
+            sequence(json!({ "id": "k", "type": "key" })),
+            sequence(
+                json!({ "id": "k", "type": "key", "actions": [{ "type": "keyDown", "value": "" }] }),
+            ),
+            sequence(
+                json!({ "id": "k", "type": "key", "actions": [{ "type": "pointerDown", "button": 0 }] }),
+            ),
+            sequence(
+                json!({ "id": "p", "type": "pointer", "actions": [{ "type": "pointerDown", "button": "left" }] }),
+            ),
+            sequence(
+                json!({ "id": "p", "type": "pointer", "actions": [{ "type": "pointerMove", "origin": "elsewhere" }] }),
+            ),
+            sequence(
+                json!({ "id": "p", "type": "pointer", "actions": [{ "type": "pointerMove", "x": "left" }] }),
+            ),
+            sequence(
+                json!({ "id": "n", "type": "none", "actions": [{ "type": "pause", "duration": -1 }] }),
+            ),
+        ] {
+            let refused = driver.handle(
+                "POST",
+                &format!("/t0k/session/{id}/actions"),
+                None,
+                &serde_json::to_vec(&body).unwrap(),
+            );
+            assert_eq!(
+                (refused.status, refused.body["value"]["error"].as_str()),
+                (400, Some("invalid argument")),
+                "{body}"
+            );
+        }
+        assert!(driver.bridge.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn releasing_the_actions_lets_go_of_keys_and_buttons() {
+        let driver = Driver::new(Fake::default(), "t0k");
+        let id = session(&driver);
+        let released = driver.handle("DELETE", &format!("/t0k/session/{id}/actions"), None, b"");
+        assert_eq!(released.status, 200);
+        assert_eq!(
+            *driver.bridge.calls.lock().unwrap(),
+            vec![("release".to_owned(), json!({}))]
+        );
+    }
+
+    #[test]
+    fn screenshots_come_from_the_bridge_and_an_element_is_cut_out_of_one() {
+        let driver = Driver::new(
+            Fake::answering(vec![Ok(
+                json!({ "x": 10.5, "y": 20.0, "width": 30.0, "height": 40.0 }),
+            )]),
+            "t0k",
+        );
+        let id = session(&driver);
+        let page = driver.handle("GET", &format!("/t0k/session/{id}/screenshot"), None, b"");
+        assert_eq!((page.status, &page.body["value"]), (200, &json!(PNG)));
+        let element = driver.handle(
+            "GET",
+            &format!("/t0k/session/{id}/element/e1/screenshot"),
+            None,
+            b"",
+        );
+        assert_eq!((element.status, &element.body["value"]), (200, &json!(PNG)));
+        assert_eq!(
+            *driver.bridge.shots.lock().unwrap(),
+            vec![
+                None,
+                Some(ViewportRect {
+                    x: 10.5,
+                    y: 20.0,
+                    width: 30.0,
+                    height: 40.0,
+                }),
+            ]
+        );
+        // The page scrolls the element into view and says where it is.
+        assert_eq!(
+            *driver.bridge.calls.lock().unwrap(),
+            vec![("prop".to_owned(), json!({ "id": "e1", "what": "viewrect" }))]
         );
     }
 }
