@@ -13,8 +13,11 @@ everywhere.
 > Early (0.1, Tauri 3 alpha). It serves the core of WebDriver: sessions,
 > timeouts, navigation, finding elements (CSS, XPath, link text, tag name),
 > clicking, typing, reading text, attributes, properties and state, running
-> scripts (sync and async) and the window's rectangle (read, move, resize,
-> maximize, minimize, full screen). Clicks and typing are DOM events, not
+> scripts (sync and async), the window's rectangle (read, move, resize,
+> maximize, minimize, full screen), user prompts (alert, confirm, prompt),
+> same-origin frames, actions (mouse and keys) and, on macOS, screenshots.
+> See [Supported commands](#supported-commands). Clicks, typing, actions and
+> dialogs are simulated in the page with DOM events and page script, not
 > OS-level input, so the mouse and keyboard are never used.
 >
 > **Verified on a real app** (2026-10-15, macOS, Tauri `3.0.0-alpha.4` with
@@ -23,16 +26,25 @@ everywhere.
 > session, reads the title, finds elements by CSS selector, waits for them to
 > be displayed and enabled, clicks, clears and types into inputs, reads and
 > asserts text, reads and resizes the window, and ends the session; sync and
-> async scripts were run on the same app with raw WebDriver requests. Windows
-> and Linux, and the XPath, link-text and tag-name strategies, are covered by
-> unit tests only.
+> async scripts were run on the same app with raw WebDriver requests. Then
+> (2026-10-15, same setup) the same test answered a confirm and a prompt
+> (answer set before, and the default dismiss), entered an `<iframe srcdoc>`
+> (finding, a script, a click and its alert inside) and was refused a
+> sandboxed frame, double-clicked, hovered and pressed Space and Enter through
+> W3C actions, and took a page screenshot (1800 x 1400 for a 900 x 700
+> window on a Retina display) and an element screenshot. Windows and Linux,
+> and the XPath, link-text and tag-name strategies, are covered by unit tests
+> only; so are `DELETE /actions`, entering a frame by index, `POST
+> /frame/parent`, right clicks, drags and Backspace, whose page side has not
+> run on a real app yet.
 >
-> Not served: screenshots (`unsupported operation`); frames, alerts, cookies,
-> actions (hover, drag), shadow roots, and opening or closing windows
-> (`unknown command`). The endpoint drives one window, `main` (or the only
-> one). Cookies are left out on purpose: on macOS the app's
-> page is `tauri://localhost`, where WKWebView keeps no cookies at all
-> (`document.cookie` reads back empty after a write).
+> Not served: cookies, shadow roots, and opening or closing windows
+> (`unknown command`); screenshots on Windows and Linux, wheel input, pen
+> and touch pointers (`unsupported operation`); cross-origin frames (`no such
+> frame`). The endpoint drives one window, `main` (or the only one). Cookies
+> are left out on purpose: on macOS the app's page is `tauri://localhost`,
+> where WKWebView keeps no cookies at all (`document.cookie` reads back empty
+> after a write).
 
 ## Set up your app
 
@@ -133,6 +145,84 @@ seleniumbase-rs.
 | `SBRS_AUTOMATION` | on in debug builds, off in release; `1` turns it on, `0` off |
 | `SBRS_AUTOMATION_PORT` | `4445`; if the port is taken (a second instance, a Selenium container), the app runs without the endpoint and says so on stderr |
 | `SBRS_AUTOMATION_TOKEN` | random, printed when the app starts |
+
+## Supported commands
+
+Every path starts with `/<token>`; session commands with
+`/session/{id}`.
+
+| Command | Endpoint | Notes |
+|---|---|---|
+| Status | `GET /status` | |
+| New and delete session | `POST /session`, `DELETE /session/{id}` | One session at a time. A new session starts in the top page, with no dialog answer or input held from the last one. |
+| Timeouts | `GET`, `POST /timeouts` | `script`, `pageLoad`, `implicit` (finding looks again until it is over). |
+| Navigation | `POST /url`, `GET /url`, `GET /title`, `POST /back`, `/forward`, `/refresh` | Waits for the new page to load. |
+| Page source | `GET /source` | Of the current frame. |
+| Window | `GET /window`, `/window/handles`, `POST /window`, `GET`/`POST /window/rect`, `POST /window/maximize`, `/minimize`, `/fullscreen` | One window, `main`. |
+| Frames | `POST /frame`, `POST /frame/parent` | Same-origin frames only (see below). |
+| Find elements | `POST /element`, `/elements`, `/element/{id}/element`, `/element/{id}/elements`, `GET /element/active` | CSS, XPath, link text, partial link text, tag name. |
+| Element state | `GET /element/{id}/text`, `/name`, `/rect`, `/enabled`, `/selected`, `/displayed`, `/attribute/{name}`, `/property/{name}`, `/css/{name}` | |
+| Element interaction | `POST /element/{id}/click`, `/clear`, `/value` | DOM events. |
+| Scripts | `POST /execute/sync`, `/execute/async` | Run in the current frame. |
+| Actions | `POST /actions`, `DELETE /actions` | Mouse, keys and pauses (see below). |
+| User prompts | `GET /alert/text`, `POST /alert/accept`, `/alert/dismiss`, `/alert/text` | Simulated (see below). |
+| Screenshots | `GET /screenshot`, `GET /element/{id}/screenshot` | macOS only; PNG. |
+
+**User prompts.** A page's `alert`, `confirm` and `prompt` stop the page
+until they are answered, and a page script cannot keep them open for a
+client to answer later. So the plugin replaces them in the page (and in
+same-origin frames) with versions that answer at once and record the dialog:
+
+- The answer is the next one the client set *before* the dialog opened:
+  `POST /alert/accept` or `POST /alert/dismiss` with no dialog recorded, and
+  for a prompt `POST /alert/text` first for the text it returns. With no
+  answer set, an alert is accepted and a confirm or prompt is dismissed
+  (`false`, `null`), as W3C's default `dismiss` would.
+- `GET /alert/text` reads the last dialog's message, or `no such alert`.
+- Accept or dismiss *after* the dialog opened only clears the record: the page
+  already has its answer. Sending text to a prompt that has opened answers
+  `unsupported operation`, and to an alert or confirm `element not
+  interactable`.
+- Commands never fail with `unexpected alert open`, and the answers set are
+  forgotten when the page loads another document.
+
+So a test that should accept a confirm accepts first, then clicks:
+
+```rust
+sb.accept_alert().await?;                 // the answer for the next dialog
+sb.click("#delete").await?;               // confirm(...) returns true at once
+assert_eq!(sb.get_alert_text().await?, "Delete the profile?");
+sb.accept_alert().await?;                 // clears the record
+```
+
+**Frames.** `POST /frame` takes `null` (the top page), an index into the
+current page's frames, or a frame element; finding, scripts, element commands,
+the page source and actions then act in that frame. Only a frame of the same
+origin as the app's page can be entered (an `<iframe srcdoc>` or one of the
+app's own pages): the plugin works through page script, which cannot reach
+into another origin, so a cross-origin or sandboxed frame answers `no such
+frame`. Navigating returns to the top page.
+
+**Actions.** `POST /actions` runs W3C actions tick by tick: one keyboard
+(`keyDown`, `keyUp`), mouse pointers (`pointerMove` from the viewport, the
+pointer or an element, `pointerDown`, `pointerUp` with buttons 0 to 4) and
+pauses. They are DOM events at the pointer's place in the current frame:
+pointer and mouse events (over, enter, move, down, up, out, leave), `click`
+with its count and `dblclick` for two presses on the same element within
+500 ms, `auxclick` and `contextmenu`, and key events into the focused element,
+where printable keys type (through `execCommand`, so the page sees `input`),
+Backspace and Delete delete, and Enter submits a form field's form. A move
+onto an element out of view scrolls it into view first. Because the events
+are not the OS's, CSS `:hover` does not apply and HTML drag and drop
+(`draggable`) does not start. Wheel input, pen and touch pointers and
+`pointerCancel` answer `unsupported operation`; `DELETE /actions` lets go of
+the keys and buttons still held.
+
+**Screenshots.** On macOS the window's `WKWebView` takes the snapshot itself
+(`takeSnapshotWithConfiguration`), at the screen's scale (so 2x on a Retina
+display), and the plugin returns it as PNG; an element's screenshot is the
+part of the view the element covers, after it is scrolled into view. Windows
+(WebView2) and Linux (WebKitGTK) answer `unsupported operation` for now.
 
 ## How it works
 
