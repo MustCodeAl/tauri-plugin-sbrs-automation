@@ -15,9 +15,11 @@ use serde_json::{Value, json};
 /// identifier").
 pub const ELEMENT_KEY: &str = "element-6066-11e4-a52e-4f735466cecf";
 
+/// How long an operation other than a script may take in the page.
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_TIMEOUT: Duration = Duration::from_secs(2);
-const PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a lookup waits before it looks again, under an implicit wait.
+const RETRY_PAUSE: Duration = Duration::from_millis(50);
 
 /// Runs one operation of the injected script in the webview, or asks the
 /// app's window.
@@ -136,6 +138,7 @@ pub struct Driver<B> {
     token: String,
     session: Mutex<Option<String>>,
     sessions: AtomicU64,
+    timeouts: Mutex<Timeouts>,
 }
 
 impl<B: Bridge> Driver<B> {
@@ -146,6 +149,7 @@ impl<B: Bridge> Driver<B> {
             token: token.into(),
             session: Mutex::new(None),
             sessions: AtomicU64::new(0),
+            timeouts: Mutex::new(Timeouts::default()),
         }
     }
 
@@ -219,7 +223,8 @@ impl<B: Bridge> Driver<B> {
     /// serves before the app has opened its window, and a session needs a page
     /// to drive, as a browser driver's does.
     fn new_session(&self) -> Result<Value, WebDriverError> {
-        self.wait_until_loaded().map_err(|_| {
+        let timeouts = Timeouts::default();
+        self.wait_until_loaded(timeouts.page_load()).map_err(|_| {
             WebDriverError::new(
                 "session not created",
                 "the app's window did not load its page in time",
@@ -231,6 +236,7 @@ impl<B: Bridge> Driver<B> {
             .session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id.clone());
+        *self.timeouts_mut() = timeouts;
         Ok(json!({
             "sessionId": id,
             "capabilities": {
@@ -238,7 +244,7 @@ impl<B: Bridge> Driver<B> {
                 "platformName": std::env::consts::OS,
                 "acceptInsecureCerts": false,
                 "setWindowRect": true,
-                "timeouts": timeouts(),
+                "timeouts": timeouts.to_json(),
             },
         }))
     }
@@ -262,6 +268,16 @@ impl<B: Bridge> Driver<B> {
         self.bridge.call(op, args, CALL_TIMEOUT)
     }
 
+    fn timeouts_mut(&self) -> std::sync::MutexGuard<'_, Timeouts> {
+        self.timeouts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn timeouts(&self) -> Timeouts {
+        *self.timeouts_mut()
+    }
+
     fn command(
         &self,
         method: &str,
@@ -269,19 +285,23 @@ impl<B: Bridge> Driver<B> {
         body: &Value,
     ) -> Result<Value, WebDriverError> {
         match (method, command) {
-            ("GET", ["timeouts"]) => Ok(timeouts()),
-            ("POST", ["timeouts"]) => Ok(Value::Null),
+            ("GET", ["timeouts"]) => Ok(self.timeouts().to_json()),
+            ("POST", ["timeouts"]) => {
+                let mut timeouts = self.timeouts_mut();
+                *timeouts = timeouts.updated(body)?;
+                Ok(Value::Null)
+            }
             ("POST", ["url"]) => {
                 let url = text(body, "url")?;
                 self.call("go", json!({ "url": url }))?;
-                self.wait_until_loaded()
+                self.wait_until_loaded(self.timeouts().page_load())
             }
             ("GET", [what @ ("url" | "title" | "source")]) => {
                 self.call("info", json!({ "what": what }))
             }
             ("POST", [action @ ("back" | "forward" | "refresh")]) => {
                 self.call("history", json!({ "action": action }))?;
-                self.wait_until_loaded()
+                self.wait_until_loaded(self.timeouts().page_load())
             }
             ("GET", ["window"]) => Ok(json!("main")),
             ("GET", ["window", "handles"]) => Ok(json!(["main"])),
@@ -335,14 +355,11 @@ impl<B: Bridge> Driver<B> {
                     name,
                 ],
             ) => self.call("prop", json!({ "id": id, "what": what, "name": name })),
-            ("POST", ["execute", kind @ ("sync" | "async")]) => self.call(
-                "script",
-                json!({
-                    "script": text(body, "script")?,
-                    "args": body.get("args").cloned().unwrap_or_else(|| json!([])),
-                    "isAsync": *kind == "async",
-                }),
-            ),
+            ("POST", ["execute", kind @ ("sync" | "async")]) => self.script(json!({
+                "script": text(body, "script")?,
+                "args": body.get("args").cloned().unwrap_or_else(|| json!([])),
+                "isAsync": *kind == "async",
+            })),
             ("GET", ["screenshot"]) | ("GET", ["element", _, "screenshot"]) => {
                 Err(WebDriverError::new(
                     "unsupported operation",
@@ -366,19 +383,47 @@ impl<B: Bridge> Driver<B> {
         }))
     }
 
-    fn find(&self, root: Option<&str>, body: &Value, all: bool) -> Result<Value, WebDriverError> {
-        self.call(
-            "find",
-            json!({ "using": text(body, "using")?, "value": text(body, "value")?, "root": root, "all": all }),
-        )
+    /// Runs a script for as long as the session's script timeout allows.
+    fn script(&self, args: Value) -> Result<Value, WebDriverError> {
+        let limit = self
+            .timeouts()
+            .script
+            .map_or(Duration::MAX, Duration::from_millis);
+        self.bridge.call("script", args, limit).map_err(|error| {
+            if error.error == "timeout" {
+                WebDriverError::new("script timeout", error.message)
+            } else {
+                error
+            }
+        })
     }
 
-    /// Waits until the page that a navigation started has loaded. The script
-    /// answers `leaving` until the old page is gone, so an old page's
-    /// `complete` is never taken for the new one.
-    fn wait_until_loaded(&self) -> Result<Value, WebDriverError> {
+    /// Finds elements, looking again until something matches or the
+    /// session's implicit wait is over.
+    fn find(&self, root: Option<&str>, body: &Value, all: bool) -> Result<Value, WebDriverError> {
+        let args = json!({ "using": text(body, "using")?, "value": text(body, "value")?, "root": root, "all": all });
         let started = Instant::now();
-        while started.elapsed() < PAGE_LOAD_TIMEOUT {
+        let wait = Duration::from_millis(self.timeouts().implicit);
+        loop {
+            let found = self.call("find", args.clone());
+            let nothing = match &found {
+                Err(error) => error.error == "no such element",
+                Ok(Value::Array(list)) => list.is_empty(),
+                Ok(_) => false,
+            };
+            if !nothing || started.elapsed() >= wait {
+                return found;
+            }
+            std::thread::sleep(RETRY_PAUSE);
+        }
+    }
+
+    /// Waits up to `limit` until the page that a navigation started has
+    /// loaded. The script answers `leaving` until the old page is gone, so an
+    /// old page's `complete` is never taken for the new one.
+    fn wait_until_loaded(&self, limit: Duration) -> Result<Value, WebDriverError> {
+        let started = Instant::now();
+        while started.elapsed() < limit {
             // While a page unloads, a call can be lost: a short timeout, then again.
             if let Ok(state) = self
                 .bridge
@@ -423,8 +468,65 @@ fn set_rect(body: &Value) -> Result<WindowCommand, WebDriverError> {
     })
 }
 
-fn timeouts() -> Value {
-    json!({ "script": 30_000, "pageLoad": 60_000, "implicit": 0 })
+/// A session's timeouts in milliseconds (the W3C `timeouts` object).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Timeouts {
+    /// How long a script may run; `None` for no limit.
+    script: Option<u64>,
+    /// How long a navigation may take to load its page.
+    page_load: u64,
+    /// How long finding elements keeps looking.
+    implicit: u64,
+}
+
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self {
+            script: Some(30_000),
+            page_load: 60_000,
+            implicit: 0,
+        }
+    }
+}
+
+impl Timeouts {
+    fn page_load(self) -> Duration {
+        Duration::from_millis(self.page_load)
+    }
+
+    fn to_json(self) -> Value {
+        json!({ "script": self.script, "pageLoad": self.page_load, "implicit": self.implicit })
+    }
+
+    /// These timeouts with the ones `body` sets (W3C Set Timeouts): a key
+    /// left out keeps its value, and only `script` may be `null`.
+    fn updated(mut self, body: &Value) -> Result<Self, WebDriverError> {
+        if let Some(value) = body.get("script") {
+            self.script = if value.is_null() {
+                None
+            } else {
+                Some(milliseconds("script", value)?)
+            };
+        }
+        if let Some(value) = body.get("pageLoad") {
+            self.page_load = milliseconds("pageLoad", value)?;
+        }
+        if let Some(value) = body.get("implicit") {
+            self.implicit = milliseconds("implicit", value)?;
+        }
+        Ok(self)
+    }
+}
+
+/// A timeout: a whole number of milliseconds up to 2^53 - 1.
+fn milliseconds(key: &str, value: &Value) -> Result<u64, WebDriverError> {
+    const MAX: u64 = (1 << 53) - 1;
+    value.as_u64().filter(|ms| *ms <= MAX).ok_or_else(|| {
+        WebDriverError::new(
+            "invalid argument",
+            format!("`{key}` must be a whole number of milliseconds from 0 to {MAX}"),
+        )
+    })
 }
 
 fn text<'a>(body: &'a Value, key: &str) -> Result<&'a str, WebDriverError> {
@@ -454,6 +556,8 @@ mod tests {
         answers: Mutex<VecDeque<Result<Value, WebDriverError>>>,
         states: Mutex<VecDeque<Result<Value, WebDriverError>>>,
         windows: Mutex<Vec<WindowCommand>>,
+        /// How long each call was allowed to take.
+        waits: Mutex<Vec<Duration>>,
     }
 
     impl Fake {
@@ -473,9 +577,10 @@ mod tests {
     }
 
     impl Bridge for Fake {
-        fn call(&self, op: &str, args: Value, _timeout: Duration) -> Result<Value, WebDriverError> {
+        fn call(&self, op: &str, args: Value, timeout: Duration) -> Result<Value, WebDriverError> {
             let state = op == "info" && args["what"] == "ready";
             self.calls.lock().unwrap().push((op.to_owned(), args));
+            self.waits.lock().unwrap().push(timeout);
             if state {
                 self.states
                     .lock()
@@ -724,6 +829,123 @@ mod tests {
             );
         }
         assert!(driver.bridge.windows.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn timeouts_are_kept_reported_and_reset_by_a_new_session() {
+        let driver = Driver::new(Fake::default(), "t0k");
+        let id = session(&driver);
+        let url = format!("/t0k/session/{id}/timeouts");
+        let set = driver.handle(
+            "POST",
+            &url,
+            None,
+            br#"{"script":null,"pageLoad":7000,"implicit":250}"#,
+        );
+        assert_eq!(set.status, 200);
+        assert_eq!(
+            driver.handle("GET", &url, None, b"").body["value"],
+            json!({ "script": null, "pageLoad": 7000, "implicit": 250 })
+        );
+        // A key left out keeps its value.
+        driver.handle("POST", &url, None, br#"{"script":5000}"#);
+        assert_eq!(
+            driver.handle("GET", &url, None, b"").body["value"],
+            json!({ "script": 5000, "pageLoad": 7000, "implicit": 250 })
+        );
+        let id = session(&driver);
+        assert_eq!(
+            driver
+                .handle("GET", &format!("/t0k/session/{id}/timeouts"), None, b"")
+                .body["value"],
+            json!({ "script": 30_000, "pageLoad": 60_000, "implicit": 0 })
+        );
+    }
+
+    #[test]
+    fn timeouts_that_are_not_ones_are_refused() {
+        let driver = Driver::new(Fake::default(), "t0k");
+        let id = session(&driver);
+        let url = format!("/t0k/session/{id}/timeouts");
+        for body in [
+            &br#"{"implicit":-1}"#[..],
+            br#"{"implicit":1.5}"#,
+            br#"{"pageLoad":null}"#,
+            br#"{"script":"soon"}"#,
+        ] {
+            let refused = driver.handle("POST", &url, None, body);
+            assert_eq!(
+                (refused.status, refused.body["value"]["error"].as_str()),
+                (400, Some("invalid argument")),
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
+    }
+
+    #[test]
+    fn a_script_may_run_as_long_as_the_script_timeout() {
+        let driver = Driver::new(
+            Fake::answering(vec![
+                Ok(json!(1)),
+                Err(WebDriverError::new("timeout", "no answer")),
+            ]),
+            "t0k",
+        );
+        let id = session(&driver);
+        driver.handle(
+            "POST",
+            &format!("/t0k/session/{id}/timeouts"),
+            None,
+            br#"{"script":45000}"#,
+        );
+        driver.bridge.waits.lock().unwrap().clear();
+        let url = format!("/t0k/session/{id}/execute/async");
+        let body = br#"{"script":"arguments[0](1)","args":[]}"#;
+        assert_eq!(driver.handle("POST", &url, None, body).status, 200);
+        assert_eq!(
+            driver.bridge.waits.lock().unwrap()[0],
+            Duration::from_secs(45)
+        );
+        // A script that runs out of time says so with the W3C code.
+        let late = driver.handle("POST", &url, None, body);
+        assert_eq!(
+            (late.status, late.body["value"]["error"].as_str()),
+            (500, Some("script timeout"))
+        );
+    }
+
+    #[test]
+    fn the_implicit_wait_looks_again_until_something_matches() {
+        let reference = json!({ ELEMENT_KEY: "e1" });
+        let driver = Driver::new(
+            Fake::answering(vec![
+                Err(WebDriverError::new("no such element", "not yet")),
+                Ok(reference.clone()),
+                Ok(json!([])),
+                Ok(json!([reference.clone()])),
+            ]),
+            "t0k",
+        );
+        let id = session(&driver);
+        driver.handle(
+            "POST",
+            &format!("/t0k/session/{id}/timeouts"),
+            None,
+            br#"{"implicit":5000}"#,
+        );
+        let find = |what: &str| {
+            driver.handle(
+                "POST",
+                &format!("/t0k/session/{id}/{what}"),
+                None,
+                br##"{"using":"css selector","value":"#late"}"##,
+            )
+        };
+        assert_eq!(find("element").body["value"], reference);
+        assert_eq!(find("elements").body["value"], json!([reference]));
+        let calls = driver.bridge.calls.lock().unwrap();
+        assert_eq!(calls.iter().filter(|(op, _)| op == "find").count(), 4);
     }
 
     #[test]
