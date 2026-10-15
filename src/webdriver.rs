@@ -143,7 +143,7 @@ impl<B: Bridge> Driver<B> {
             ("GET", ["status"]) => {
                 Ok(json!({ "ready": true, "message": "tauri-plugin-sbrs-automation is ready" }))
             }
-            ("POST", ["session"]) => Ok(self.new_session()),
+            ("POST", ["session"]) => self.new_session(),
             ("DELETE", ["session", id]) => {
                 self.check_session(id)?;
                 *self
@@ -160,14 +160,23 @@ impl<B: Bridge> Driver<B> {
         }
     }
 
-    fn new_session(&self) -> Value {
+    /// Starts a session once the app's window has loaded its page. The plugin
+    /// serves before the app has opened its window, and a session needs a page
+    /// to drive, as a browser driver's does.
+    fn new_session(&self) -> Result<Value, WebDriverError> {
+        self.wait_until_loaded().map_err(|_| {
+            WebDriverError::new(
+                "session not created",
+                "the app's window did not load its page in time",
+            )
+        })?;
         let number = self.sessions.fetch_add(1, Ordering::Relaxed) + 1;
         let id = format!("sbrs-automation-{number}");
         *self
             .session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id.clone());
-        json!({
+        Ok(json!({
             "sessionId": id,
             "capabilities": {
                 "browserName": "tauri",
@@ -176,7 +185,7 @@ impl<B: Bridge> Driver<B> {
                 "setWindowRect": false,
                 "timeouts": timeouts(),
             },
-        })
+        }))
     }
 
     fn check_session(&self, id: &str) -> Result<(), WebDriverError> {
@@ -340,11 +349,14 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
 
-    /// Records each operation and answers from a queue (`null` when empty).
+    /// Records each operation. The page's load state (`info` `ready`) comes
+    /// from `states` (`complete` when empty), every other answer from
+    /// `answers` (`null` when empty).
     #[derive(Default)]
     struct Fake {
         calls: Mutex<Vec<(String, Value)>>,
         answers: Mutex<VecDeque<Result<Value, WebDriverError>>>,
+        states: Mutex<VecDeque<Result<Value, WebDriverError>>>,
     }
 
     impl Fake {
@@ -354,21 +366,39 @@ mod tests {
                 ..Self::default()
             }
         }
+
+        fn loading(states: Vec<Result<Value, WebDriverError>>) -> Self {
+            Self {
+                states: Mutex::new(states.into()),
+                ..Self::default()
+            }
+        }
     }
 
     impl Bridge for Fake {
         fn call(&self, op: &str, args: Value, _timeout: Duration) -> Result<Value, WebDriverError> {
+            let state = op == "info" && args["what"] == "ready";
             self.calls.lock().unwrap().push((op.to_owned(), args));
-            self.answers
-                .lock()
-                .unwrap()
-                .pop_front()
-                .unwrap_or(Ok(Value::Null))
+            if state {
+                self.states
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or_else(|| Ok(json!("complete")))
+            } else {
+                self.answers
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or(Ok(Value::Null))
+            }
         }
     }
 
+    /// Starts a session and forgets the calls that took.
     fn session(driver: &Driver<Fake>) -> String {
         let response = driver.handle("POST", "/t0k/session", None, b"{}");
+        driver.bridge.calls.lock().unwrap().clear();
         response.body["value"]["sessionId"]
             .as_str()
             .unwrap()
@@ -466,18 +496,42 @@ mod tests {
     }
 
     #[test]
-    fn navigation_waits_for_the_new_page() {
+    fn a_new_session_waits_for_the_window_and_its_page() {
+        // The plugin serves before the app has opened its window, so a client
+        // that starts a session at once must not get one that has no page yet.
         let driver = Driver::new(
-            Fake::answering(vec![
-                Ok(Value::Null),
-                Ok(json!("leaving")),
-                Err(WebDriverError::new("timeout", "lost while unloading")),
+            Fake::loading(vec![
+                Err(WebDriverError::new(
+                    "no such window",
+                    "the app has no window",
+                )),
                 Ok(json!("loading")),
                 Ok(json!("complete")),
             ]),
             "t0k",
         );
+        let response = driver.handle("POST", "/t0k/session", None, b"{}");
+        assert_eq!(response.status, 200);
+        assert!(response.body["value"]["sessionId"].is_string());
+        let calls = driver.bridge.calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert!(
+            calls
+                .iter()
+                .all(|(op, args)| op == "info" && args == &json!({ "what": "ready" }))
+        );
+    }
+
+    #[test]
+    fn navigation_waits_for_the_new_page() {
+        let driver = Driver::new(Fake::default(), "t0k");
         let id = session(&driver);
+        driver.bridge.states.lock().unwrap().extend([
+            Ok(json!("leaving")),
+            Err(WebDriverError::new("timeout", "lost while unloading")),
+            Ok(json!("loading")),
+            Ok(json!("complete")),
+        ]);
         let response = driver.handle(
             "POST",
             &format!("/t0k/session/{id}/url"),
