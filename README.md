@@ -32,11 +32,15 @@ everywhere.
 > (finding, a script, a click and its alert inside) and was refused a
 > sandboxed frame, double-clicked, hovered and pressed Space and Enter through
 > W3C actions, and took a page screenshot (1800 x 1400 for a 900 x 700
-> window on a Retina display) and an element screenshot. Windows and Linux,
-> and the XPath, link-text and tag-name strategies, are covered by unit tests
-> only; so are `DELETE /actions`, entering a frame by index, `POST
-> /frame/parent`, right clicks, drags and Backspace, whose page side has not
-> run on a real app yet.
+> window on a Retina display) and an element screenshot.
+>
+> **Not run on a real app yet:** Windows and Linux; the XPath, link-text and
+> tag-name strategies, which no test covers; `DELETE /actions`, entering a
+> frame by index and `POST /frame/parent`, whose requests the Rust unit tests
+> check against a fake page script; and right clicks, drags and Backspace,
+> whose page side is checked only by the tests of `src/bridge.js` in a fake
+> page under Node.js (`tests/bridge.test.mjs`, which `cargo test` runs and
+> which need `node` on `PATH`), not in a webview.
 >
 > Not served: cookies, shadow roots, and opening or closing windows
 > (`unknown command`); screenshots on Windows and Linux, wheel input, pen

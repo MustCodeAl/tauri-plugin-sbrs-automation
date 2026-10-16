@@ -285,3 +285,61 @@ test('the answer set before a dialog opens is what the page gets', async () => {
   await page.dialog('accept');
   assert.equal(page.window.prompt('Name?', 'nobody'), 'nobody');
 });
+
+test('a right click sends auxclick and contextmenu, and no click', async () => {
+  const page = new Page();
+  const menu = page.add('div', { id: 'menu', box: { left: 100, top: 100, width: 50, height: 20 } });
+  await page.input(
+    { type: 'pointerMove', origin: { element: await page.ref(menu) }, x: 0, y: 0 },
+    { type: 'pointerDown', button: 2 },
+    { type: 'pointerUp', button: 2 },
+  );
+  const seen = page.seen('mousedown', 'mouseup', 'click', 'auxclick', 'contextmenu');
+  assert.deepEqual(seen.map(({ type, target, button, x, y }) => [type, target, button, x, y]), [
+    ['mousedown', 'menu', 2, 125, 110],
+    ['mouseup', 'menu', 2, 125, 110],
+    ['auxclick', 'menu', 2, 125, 110],
+    ['contextmenu', 'menu', 2, 125, 110],
+  ]);
+});
+
+test('a drag from one element to another clicks the element that holds both', async () => {
+  const page = new Page();
+  const list = page.add('ul', { id: 'list', box: { left: 0, top: 100, width: 400, height: 200 } });
+  const from = page.add('li', { id: 'from', parent: list, box: { left: 0, top: 100, width: 400, height: 50 } });
+  const to = page.add('li', { id: 'to', parent: list, box: { left: 0, top: 200, width: 400, height: 50 } });
+  await page.input(
+    { type: 'pointerMove', origin: { element: await page.ref(from) }, x: 0, y: 0 },
+    { type: 'pointerDown', button: 0 },
+    { type: 'pointerMove', origin: { element: await page.ref(to) }, x: 0, y: 0 },
+    { type: 'pointerUp', button: 0 },
+  );
+  const seen = page.seen('mousedown', 'mousemove', 'mouseup', 'click', 'dblclick');
+  assert.deepEqual(seen.map(({ type, target, detail }) => [type, target, detail]), [
+    ['mousemove', 'from', undefined],
+    ['mousedown', 'from', 1],
+    ['mousemove', 'to', undefined],
+    ['mouseup', 'to', 1],
+    ['click', 'list', 1],
+  ]);
+});
+
+test('Backspace deletes the last character of the focused field, and the page sees input', async () => {
+  const page = new Page();
+  const field = page.add('input', { id: 'name', box: { left: 0, top: 0, width: 200, height: 20 } });
+  field.value = 'Adam';
+  field.focus();
+  await page.run('input', {
+    actions: [
+      { source: 'keyboard', type: 'keyDown', value: BACKSPACE },
+      { source: 'keyboard', type: 'keyUp', value: BACKSPACE },
+    ],
+  });
+  assert.equal(field.value, 'Ada');
+  const seen = page.seen('keydown', 'keypress', 'input', 'keyup');
+  assert.deepEqual(seen.map(({ type, target }) => [type, target]), [
+    ['keydown', 'name'],
+    ['input', 'name'],
+    ['keyup', 'name'],
+  ]);
+});
