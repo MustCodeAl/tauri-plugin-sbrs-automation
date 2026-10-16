@@ -177,12 +177,12 @@
   // prompt block the page), so it answers at once: with the next answer the
   // client set before (accept or dismiss, and the text for a prompt), else
   // alert is accepted and confirm and prompt are dismissed. The dialog stays
-  // recorded until the client accepts or dismisses it, which then only
-  // clears the record.
+  // recorded, with the answer the page got, until the client accepts or
+  // dismisses it as it was answered.
   const dialogs = { open: null, answers: [], text: null };
   const ask = (type, message, fallback) => {
     const answer = dialogs.answers.shift() || { accept: type === 'alert', text: null };
-    dialogs.open = { type, text: message === undefined ? '' : String(message) };
+    dialogs.open = { type, text: message === undefined ? '' : String(message), accepted: answer.accept };
     if (type === 'alert') return undefined;
     if (type === 'confirm') return answer.accept;
     if (!answer.accept) return null;
@@ -545,10 +545,16 @@
         dialogs.text = String(text);
         return null;
       }
-      // Before a dialog, accept or dismiss is the answer for the next one;
-      // after it, they clear the record.
+      // Before a dialog, accept or dismiss is the answer for the next one.
+      // After it, they clear the record, but only as the page was answered:
+      // the page has its answer and cannot be given another.
+      const accept = action === 'accept';
+      if (open && open.type !== 'alert' && open.accepted !== accept) {
+        fail('unsupported operation', `the ${open.type} was ${open.accepted ? 'accepted' : 'dismissed'} when it opened, `
+          + `and the page cannot be answered again: ${action} before the ${open.type} opens`);
+      }
       if (open) dialogs.open = null;
-      else dialogs.answers.push({ accept: action === 'accept', text: dialogs.text });
+      else dialogs.answers.push({ accept, text: dialogs.text });
       dialogs.text = null;
       return null;
     },

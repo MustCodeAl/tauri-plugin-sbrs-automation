@@ -343,3 +343,42 @@ test('Backspace deletes the last character of the focused field, and the page se
     ['keyup', 'name'],
   ]);
 });
+
+test('accepting a confirm that was dismissed when it opened is refused; dismissing it clears it', async () => {
+  const page = new Page();
+  assert.equal(page.window.confirm('Delete?'), false);
+  await refused(page.dialog('accept'), 'unsupported operation');
+  assert.equal(await page.dialog('text'), 'Delete?');
+  await page.dialog('dismiss');
+  await refused(page.dialog('text'), 'no such alert');
+});
+
+test('dismissing a confirm that was accepted when it opened is refused; accepting it clears it', async () => {
+  const page = new Page();
+  await page.dialog('accept');
+  assert.equal(page.window.confirm('Delete?'), true);
+  await refused(page.dialog('dismiss'), 'unsupported operation');
+  await page.dialog('accept');
+  await refused(page.dialog('text'), 'no such alert');
+});
+
+test('a prompt that opened is accepted or dismissed only as it was answered', async () => {
+  const page = new Page();
+  assert.equal(page.window.prompt('Name?'), null);
+  await refused(page.dialog('accept'), 'unsupported operation');
+  await page.dialog('dismiss');
+  await page.dialog('accept');
+  assert.equal(page.window.prompt('Name?', 'nobody'), 'nobody');
+  await refused(page.dialog('dismiss'), 'unsupported operation');
+  await page.dialog('accept');
+  await refused(page.dialog('text'), 'no such alert');
+});
+
+test('an alert that opened may be accepted or dismissed', async () => {
+  const page = new Page();
+  page.window.alert('Saved');
+  await page.dialog('dismiss');
+  page.window.alert('Saved again');
+  await page.dialog('accept');
+  await refused(page.dialog('text'), 'no such alert');
+});

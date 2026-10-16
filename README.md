@@ -183,10 +183,12 @@ same-origin frames) with versions that answer at once and record the dialog:
   answer set, an alert is accepted and a confirm or prompt is dismissed
   (`false`, `null`), as W3C's default `dismiss` would.
 - `GET /alert/text` reads the last dialog's message, or `no such alert`.
-- Accept or dismiss *after* the dialog opened only clears the record: the page
-  already has its answer. Sending text to a prompt that has opened answers
-  `unsupported operation`, and to an alert or confirm `element not
-  interactable`.
+- Accept or dismiss *after* the dialog opened clears the record when it is
+  the answer the page got (either one for an alert). The other one answers
+  `unsupported operation` and keeps the record: the page already has its
+  answer and cannot be given another. Sending text to a prompt that has
+  opened answers `unsupported operation`, and to an alert or confirm
+  `element not interactable`.
 - Commands never fail with `unexpected alert open`, and the answers set are
   forgotten when the page loads another document.
 
@@ -198,6 +200,10 @@ sb.click("#delete").await?;               // confirm(...) returns true at once
 assert_eq!(sb.get_alert_text().await?, "Delete the profile?");
 sb.accept_alert().await?;                 // clears the record
 ```
+
+The usual WebDriver order, click and then accept (`wait_for_and_accept_alert`),
+gets `unsupported operation` for a confirm or prompt: it was dismissed when it
+opened, so the test fails there instead of going on as if it was accepted.
 
 **Frames.** `POST /frame` takes `null` (the top page), an index into the
 current page's frames, or a frame element; finding, scripts, element commands,
