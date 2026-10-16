@@ -71,12 +71,10 @@ fn start<R: Runtime>(
     // SAFETY: a new configuration, made on the main thread.
     let configuration = unsafe { WKSnapshotConfiguration::new(main_thread) };
     if let Some(area) = area {
-        let rect = CGRect::new(
-            CGPoint::new(area.x, area.y),
-            CGSize::new(area.width, area.height),
-        );
+        // SAFETY: a property of the web view, read on the main thread.
+        let zoom = unsafe { webview.pageZoom() };
         // SAFETY: any rectangle is accepted; WebKit draws the part in view.
-        unsafe { configuration.setRect(rect) };
+        unsafe { configuration.setRect(view_rect(area, zoom)) };
     }
     let handler = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
         // SAFETY: WebKit passes an image or an error, each null or valid for
@@ -97,6 +95,16 @@ fn start<R: Runtime>(
         webview.takeSnapshotWithConfiguration_completionHandler(Some(&configuration), &handler)
     };
     Ok(())
+}
+
+/// `area`, in the page's CSS pixels, in the points of the web view, which
+/// draws the page `zoom` points to the CSS pixel (`pageZoom`, which Tauri's
+/// `set_zoom` and the zoom hotkeys change).
+fn view_rect(area: ViewportRect, zoom: f64) -> CGRect {
+    CGRect::new(
+        CGPoint::new(area.x * zoom, area.y * zoom),
+        CGSize::new(area.width * zoom, area.height * zoom),
+    )
 }
 
 /// The first `WKWebView` in `view` or among its subviews.
@@ -126,4 +134,36 @@ fn encode(image: &NSImage) -> Png {
 
 fn failed(message: impl Into<String>) -> WebDriverError {
     WebDriverError::new("unable to capture screen", message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const AREA: ViewportRect = ViewportRect {
+        x: 10.0,
+        y: 20.0,
+        width: 30.0,
+        height: 40.0,
+    };
+
+    /// The left, top, width and height of `rect`.
+    fn parts(rect: CGRect) -> [f64; 4] {
+        [
+            rect.origin.x,
+            rect.origin.y,
+            rect.size.width,
+            rect.size.height,
+        ]
+    }
+
+    #[test]
+    fn an_area_of_an_unzoomed_page_is_the_same_in_points() {
+        assert_eq!(parts(view_rect(AREA, 1.0)), [10.0, 20.0, 30.0, 40.0]);
+    }
+
+    #[test]
+    fn an_area_of_a_zoomed_page_is_scaled_by_the_zoom() {
+        assert_eq!(parts(view_rect(AREA, 1.5)), [15.0, 30.0, 45.0, 60.0]);
+    }
 }

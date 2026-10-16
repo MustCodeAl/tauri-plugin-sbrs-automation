@@ -244,7 +244,8 @@ the keys and buttons still held.
 **Screenshots.** On macOS the window's `WKWebView` takes the snapshot itself
 (`takeSnapshotWithConfiguration`), at the screen's scale (so 2x on a Retina
 display), and the plugin returns it as PNG; an element's screenshot is the
-part of the view the element covers, after it is scrolled into view. Windows
+part of the view the element covers, after it is scrolled into view (also
+when the page is zoomed, as Tauri's `set_zoom` and the zoom hotkeys do). Windows
 (WebView2) and Linux (WebKitGTK) answer `unsupported operation` for now.
 
 ## How it works
