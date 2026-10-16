@@ -32,7 +32,11 @@ everywhere.
 > (finding, a script, a click and its alert inside) and was refused a
 > sandboxed frame, double-clicked, hovered and pressed Space and Enter through
 > W3C actions, and took a page screenshot (1800 x 1400 for a 900 x 700
-> window on a Retina display) and an element screenshot.
+> window on a Retina display) and an element screenshot. Then (2026-10-16,
+> same setup) it was refused accepting a confirm that had been dismissed
+> when it opened, saw an alert leave the answer to the confirm after it and
+> cleared the two in order, and hovered and took the element screenshot of a
+> paragraph far below the view on a page with `scroll-behavior: smooth`.
 >
 > **Not run on a real app yet:** Windows and Linux; the XPath, link-text and
 > tag-name strategies, which no test covers; `DELETE /actions`, entering a
@@ -40,7 +44,9 @@ everywhere.
 > check against a fake page script; and right clicks, drags and Backspace,
 > whose page side is checked only by the tests of `src/bridge.js` in a fake
 > page under Node.js (`tests/bridge.test.mjs`, which `cargo test` runs and
-> which need `node` on `PATH`), not in a webview.
+> which need `node` on `PATH`), not in a webview; and element screenshots of
+> a zoomed page, checked only by a unit test of the conversion to the web
+> view's points.
 >
 > Not served: cookies, shadow roots, and opening or closing windows
 > (`unknown command`); screenshots on Windows and Linux, wheel input, pen
@@ -235,11 +241,11 @@ with its count and `dblclick` for two presses on the same element within
 where printable keys type (through `execCommand`, so the page sees `input`),
 Backspace and Delete delete, and Enter submits a form field's form. A move
 onto an element out of view scrolls it into view first, at once even when the
-page sets `scroll-behavior: smooth` (as clicks and element screenshots do). Because the events
-are not the OS's, CSS `:hover` does not apply and HTML drag and drop
-(`draggable`) does not start. Wheel input, pen and touch pointers and
-`pointerCancel` answer `unsupported operation`; `DELETE /actions` lets go of
-the keys and buttons still held.
+page sets `scroll-behavior: smooth` (as clicks and element screenshots do).
+Because the events are not the OS's, CSS `:hover` does not apply and HTML
+drag and drop (`draggable`) does not start. Wheel input, pen and touch
+pointers and `pointerCancel` answer `unsupported operation`; `DELETE /actions`
+lets go of the keys and buttons still held.
 
 **Screenshots.** On macOS the window's `WKWebView` takes the snapshot itself
 (`takeSnapshotWithConfiguration`), at the screen's scale (so 2x on a Retina
