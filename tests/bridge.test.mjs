@@ -164,8 +164,13 @@ class Page {
       HTMLInputElement,
       HTMLTextAreaElement,
       Function,
-      getComputedStyle: () => ({
-        display: 'block', visibility: 'visible', opacity: '1', getPropertyValue: () => '',
+      getComputedStyle: (element) => ({
+        display: 'block',
+        visibility: 'visible',
+        opacity: '1',
+        paddingLeft: `${element.padding || 0}px`,
+        paddingTop: `${element.padding || 0}px`,
+        getPropertyValue: () => '',
       }),
       __TAURI_INTERNALS__: {
         invoke: async (command, payload) => {
@@ -460,4 +465,22 @@ test('a click scrolls the element into view at once, also on a page that scrolls
   await page.run('click', { id: await page.ref(far) });
   assert.deepEqual(page.seen('click').map(({ target }) => target), ['far']);
   assert.deepEqual(page.scrolls, ['instant']);
+});
+
+test('an element screenshot in a frame with a border and padding is cut where the element shows', async () => {
+  const page = new Page();
+  const frame = page.add('iframe', { id: 'frame', box: { left: 50, top: 50, width: 324, height: 224 } });
+  frame.clientLeft = 2;
+  frame.clientTop = 2;
+  frame.padding = 10;
+  // The frame's own page, 300 x 200 inside the frame's border and padding.
+  const inner = { scrollX: 0, scrollY: 0, scrollTo: () => {}, events: [] };
+  inner.window = {
+    innerWidth: 300, innerHeight: 200, frameElement: frame, parent: page.window, getComputedStyle: page.window.getComputedStyle,
+  };
+  inner.document = { defaultView: inner.window };
+  page.window.inside = new Element(inner, 'button', { id: 'inside', box: { left: 20, top: 30, width: 40, height: 10 } });
+  const inside = await page.run('script', { script: 'return this.inside;', args: [], isAsync: false });
+  const area = await page.run('prop', { id: inside[KEY], what: 'viewrect' });
+  assert.deepEqual(area, { x: 82, y: 92, width: 40, height: 10 });
 });

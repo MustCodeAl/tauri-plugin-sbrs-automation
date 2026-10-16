@@ -166,9 +166,11 @@
     for (let view = viewOf(element); view !== window && view.frameElement; view = view.parent) {
       clip(view);
       const frame = view.frameElement;
+      // The frame's view starts inside its border (client) and its padding.
       const box = frame.getBoundingClientRect();
-      const dx = box.left + frame.clientLeft;
-      const dy = box.top + frame.clientTop;
+      const style = viewOf(frame).getComputedStyle(frame);
+      const dx = box.left + frame.clientLeft + (parseFloat(style.paddingLeft) || 0);
+      const dy = box.top + frame.clientTop + (parseFloat(style.paddingTop) || 0);
       left += dx;
       right += dx;
       top += dy;
