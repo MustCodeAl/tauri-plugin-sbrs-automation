@@ -175,7 +175,11 @@ Every path starts with `/<token>`; session commands with
 **User prompts.** A page's `alert`, `confirm` and `prompt` stop the page
 until they are answered, and a page script cannot keep them open for a
 client to answer later. So the plugin replaces them in the page (and in
-same-origin frames) with versions that answer at once and record the dialog:
+same-origin frames) with versions that answer at once and record the dialog.
+It does so whenever it is on (in debug builds by default), also while no test
+drives the app: the app's dialogs then never show, and answer as below. A
+same-origin frame gets the replacements when the next command runs after the
+frame has loaded; a dialog it opens before that is the real one.
 
 - A confirm or prompt gets the answer the client set *before* it opened:
   `POST /alert/accept` or `POST /alert/dismiss` with no dialog recorded (the
