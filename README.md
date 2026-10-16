@@ -177,25 +177,33 @@ until they are answered, and a page script cannot keep them open for a
 client to answer later. So the plugin replaces them in the page (and in
 same-origin frames) with versions that answer at once and record the dialog:
 
-- The answer is the next one the client set *before* the dialog opened:
-  `POST /alert/accept` or `POST /alert/dismiss` with no dialog recorded, and
-  for a prompt `POST /alert/text` first for the text it returns. With no
-  answer set, an alert is accepted and a confirm or prompt is dismissed
-  (`false`, `null`), as W3C's default `dismiss` would.
-- `GET /alert/text` reads the last dialog's message, or `no such alert`.
-- Accept or dismiss *after* the dialog opened clears the record when it is
-  the answer the page got (either one for an alert). The other one answers
-  `unsupported operation` and keeps the record: the page already has its
-  answer and cannot be given another. Sending text to a prompt that has
+- A confirm or prompt gets the answer the client set *before* it opened:
+  `POST /alert/accept` or `POST /alert/dismiss` with no dialog recorded (the
+  last one sent counts), and for a prompt `POST /alert/text` first for the
+  text it returns. The first confirm or prompt uses that answer up; an alert
+  needs none and leaves it for the next one. With no answer set, a confirm
+  or prompt is dismissed (`false`, `null`), as W3C's default `dismiss` would.
+- Every dialog is recorded, oldest first (the last 100 are kept), and
+  `GET /alert/text` reads the oldest one's message, or `no such alert`.
+- Accept or dismiss *after* a dialog opened clears the oldest record when it
+  is the answer the page got (either one for an alert). The other one
+  answers `unsupported operation` and keeps the record: the page already has
+  its answer and cannot be given another. Sending text to a prompt that has
   opened answers `unsupported operation`, and to an alert or confirm
   `element not interactable`.
-- Commands never fail with `unexpected alert open`, and the answers set are
-  forgotten when the page loads another document.
+- While a dialog is recorded, accept or dismiss handles it and sets no
+  answer. So clear the dialogs a test does not care about (or check
+  `GET /alert/text`) before setting the answer for the next one. An answer
+  that no dialog used stays set for the next confirm or prompt, however much
+  later; `POST /alert/dismiss` with no dialog recorded puts the default back.
+- Commands never fail with `unexpected alert open`. The dialogs and the
+  answer are forgotten when the page loads another document and when a new
+  session starts.
 
 So a test that should accept a confirm accepts first, then clicks:
 
 ```rust
-sb.accept_alert().await?;                 // the answer for the next dialog
+sb.accept_alert().await?;                 // the answer for the next confirm
 sb.click("#delete").await?;               // confirm(...) returns true at once
 assert_eq!(sb.get_alert_text().await?, "Delete the profile?");
 sb.accept_alert().await?;                 // clears the record

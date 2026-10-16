@@ -382,3 +382,49 @@ test('an alert that opened may be accepted or dismissed', async () => {
   await page.dialog('accept');
   await refused(page.dialog('text'), 'no such alert');
 });
+
+test('an alert leaves the answer set for the confirm that follows it', async () => {
+  const page = new Page();
+  await page.dialog('accept');
+  page.window.alert('Unsaved changes');
+  assert.equal(page.window.confirm('Leave?'), true);
+});
+
+test('a second dialog does not hide the first: they are read and cleared oldest first', async () => {
+  const page = new Page();
+  page.window.alert('Unsaved changes');
+  page.window.confirm('Leave?');
+  assert.equal(await page.dialog('text'), 'Unsaved changes');
+  await page.dialog('accept');
+  assert.equal(await page.dialog('text'), 'Leave?');
+  await refused(page.dialog('accept'), 'unsupported operation');
+  await page.dialog('dismiss');
+  await refused(page.dialog('text'), 'no such alert');
+});
+
+test('only the last answer set counts, and the first confirm or prompt uses it up', async () => {
+  const page = new Page();
+  await page.dialog('accept');
+  await page.dialog('dismiss');
+  assert.equal(page.window.confirm('One?'), false);
+  await page.dialog('dismiss');
+  await page.dialog('accept');
+  assert.equal(page.window.confirm('Two?'), true);
+  assert.equal(page.window.prompt('Three?', 'nobody'), null);
+});
+
+test('a new session forgets the dialogs and the answer set', async () => {
+  const page = new Page();
+  page.window.alert('Saved');
+  await page.dialog('accept');
+  await page.dialog('accept');
+  await page.run('reset');
+  await refused(page.dialog('text'), 'no such alert');
+  assert.equal(page.window.confirm('Delete?'), false);
+});
+
+test('a page that opens dialogs without end keeps only the last hundred recorded', async () => {
+  const page = new Page();
+  for (let number = 1; number <= 150; number += 1) page.window.alert(`Alert ${number}`);
+  assert.equal(await page.dialog('text'), 'Alert 51');
+});

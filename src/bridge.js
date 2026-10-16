@@ -174,15 +174,24 @@
   };
 
   // User prompts. A dialog cannot wait for the client (alert, confirm and
-  // prompt block the page), so it answers at once: with the next answer the
-  // client set before (accept or dismiss, and the text for a prompt), else
-  // alert is accepted and confirm and prompt are dismissed. The dialog stays
-  // recorded, with the answer the page got, until the client accepts or
-  // dismisses it as it was answered.
-  const dialogs = { open: null, answers: [], text: null };
+  // prompt block the page), so it answers at once. A confirm or prompt takes
+  // the answer the client set before it opened (accept or dismiss, and the
+  // text for a prompt), which no other dialog then gets, else it is
+  // dismissed; an alert needs no answer and leaves the one set for the next
+  // confirm or prompt. Each dialog stays recorded, with the answer the page
+  // got, until the client accepts or dismisses it as it was answered, the
+  // oldest first.
+  const dialogs = { open: [], answer: null, text: null };
+  // At most this many dialogs stay recorded; the oldest are forgotten.
+  const MAX_DIALOGS = 100;
   const ask = (type, message, fallback) => {
-    const answer = dialogs.answers.shift() || { accept: type === 'alert', text: null };
-    dialogs.open = { type, text: message === undefined ? '' : String(message), accepted: answer.accept };
+    let answer = { accept: true, text: null };
+    if (type !== 'alert') {
+      answer = dialogs.answer || { accept: false, text: null };
+      dialogs.answer = null;
+    }
+    dialogs.open.push({ type, text: message === undefined ? '' : String(message), accepted: answer.accept });
+    if (dialogs.open.length > MAX_DIALOGS) dialogs.open.shift();
     if (type === 'alert') return undefined;
     if (type === 'confirm') return answer.accept;
     if (!answer.accept) return null;
@@ -532,9 +541,9 @@
       return wrap(await new Promise((resolve) => run.apply(win, [...values, resolve])));
     },
     dialog: ({ action, text }) => {
-      const { open } = dialogs;
+      const [open] = dialogs.open;
       if (action === 'text') {
-        if (!open) fail('no such alert', 'no dialog has opened since the last accept or dismiss');
+        if (!open) fail('no such alert', 'no dialog is open: none has opened, or each was accepted or dismissed');
         return open.text;
       }
       if (action === 'type') {
@@ -545,16 +554,17 @@
         dialogs.text = String(text);
         return null;
       }
-      // Before a dialog, accept or dismiss is the answer for the next one.
-      // After it, they clear the record, but only as the page was answered:
-      // the page has its answer and cannot be given another.
+      // With no dialog open, accept or dismiss is the answer for the next
+      // confirm or prompt, in place of any set before. With one open, they
+      // clear the oldest, but only as the page was answered: the page has its
+      // answer and cannot be given another.
       const accept = action === 'accept';
       if (open && open.type !== 'alert' && open.accepted !== accept) {
         fail('unsupported operation', `the ${open.type} was ${open.accepted ? 'accepted' : 'dismissed'} when it opened, `
           + `and the page cannot be answered again: ${action} before the ${open.type} opens`);
       }
-      if (open) dialogs.open = null;
-      else dialogs.answers.push({ accept, text: dialogs.text });
+      if (open) dialogs.open.shift();
+      else dialogs.answer = { accept, text: dialogs.text };
       dialogs.text = null;
       return null;
     },
@@ -615,8 +625,8 @@
     // A new session: the top page, no dialog answers, no input held.
     reset: () => {
       frames = [];
-      dialogs.open = null;
-      dialogs.answers = [];
+      dialogs.open = [];
+      dialogs.answer = null;
       dialogs.text = null;
       forgetInput();
       return null;
