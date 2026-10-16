@@ -82,6 +82,10 @@ class Element {
     if (this.page.document.activeElement === this) this.page.document.activeElement = this.page.document.body;
   }
 
+  click() {
+    this.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+  }
+
   dispatchEvent(event) {
     this.page.events.push({
       type: event.type, target: this.id, button: event.button, detail: event.detail, x: event.clientX, y: event.clientY,
@@ -427,4 +431,33 @@ test('a page that opens dialogs without end keeps only the last hundred recorded
   const page = new Page();
   for (let number = 1; number <= 150; number += 1) page.window.alert(`Alert ${number}`);
   assert.equal(await page.dialog('text'), 'Alert 51');
+});
+
+// A page 3000 pixels tall that scrolls smoothly, and a button far below the
+// part in view.
+const smoothPage = () => {
+  const page = new Page({ height: 3000, smooth: true });
+  const far = page.add('button', { id: 'far', box: { left: 100, top: 2000, width: 200, height: 40 } });
+  return { page, far };
+};
+
+test('an element screenshot measures the element once it is in view, on a page that scrolls smoothly', async () => {
+  const { page, far } = smoothPage();
+  const area = await page.run('prop', { id: await page.ref(far), what: 'viewrect' });
+  assert.deepEqual(area, { x: 100, y: 280, width: 200, height: 40 });
+  assert.deepEqual(page.scrolls, ['instant']);
+});
+
+test('a pointer move onto an element out of view lands on it, on a page that scrolls smoothly', async () => {
+  const { page, far } = smoothPage();
+  await page.input({ type: 'pointerMove', origin: { element: await page.ref(far) }, x: 0, y: 0 });
+  assert.deepEqual(page.seen('mousemove').map(({ target, x, y }) => [target, x, y]), [['far', 200, 300]]);
+  assert.deepEqual(page.scrolls, ['instant']);
+});
+
+test('a click scrolls the element into view at once, also on a page that scrolls smoothly', async () => {
+  const { page, far } = smoothPage();
+  await page.run('click', { id: await page.ref(far) });
+  assert.deepEqual(page.seen('click').map(({ target }) => target), ['far']);
+  assert.deepEqual(page.scrolls, ['instant']);
 });

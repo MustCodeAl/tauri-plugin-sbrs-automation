@@ -230,7 +230,8 @@ with its count and `dblclick` for two presses on the same element within
 500 ms, `auxclick` and `contextmenu`, and key events into the focused element,
 where printable keys type (through `execCommand`, so the page sees `input`),
 Backspace and Delete delete, and Enter submits a form field's form. A move
-onto an element out of view scrolls it into view first. Because the events
+onto an element out of view scrolls it into view first, at once even when the
+page sets `scroll-behavior: smooth` (as clicks and element screenshots do). Because the events
 are not the OS's, CSS `:hover` does not apply and HTML drag and drop
 (`draggable`) does not start. Wheel input, pen and touch pointers and
 `pointerCancel` answer `unsupported operation`; `DELETE /actions` lets go of

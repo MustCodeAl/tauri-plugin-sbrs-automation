@@ -146,10 +146,16 @@
     }
     return { win: doc.defaultView, doc };
   };
+  // Scrolls an element to the middle of the view at once, as a driver does:
+  // under the page's CSS `scroll-behavior: smooth` a plain scrollIntoView
+  // moves it over the frames that follow, after it has been measured.
+  const scrollToCentre = (element) => {
+    element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+  };
   // Where an element shows in the app's viewport, after it is scrolled into
   // view and cut to the viewports it is in: the area of its screenshot.
   const viewportRect = (element) => {
-    element.scrollIntoView({ block: 'center', inline: 'center' });
+    scrollToCentre(element);
     let { left, top, right, bottom } = element.getBoundingClientRect();
     const clip = (view) => {
       left = Math.max(left, 0);
@@ -294,7 +300,7 @@
       const centre = () => [rect.left + rect.width / 2, rect.top + rect.height / 2];
       const [cx, cy] = centre();
       if (cx < 0 || cy < 0 || cx > win.innerWidth || cy > win.innerHeight) {
-        element.scrollIntoView({ block: 'center', inline: 'center' });
+        scrollToCentre(element);
         rect = element.getBoundingClientRect();
       }
       const [ex, ey] = centre();
@@ -508,7 +514,7 @@
     },
     click: ({ id }) => {
       const element = get(id);
-      element.scrollIntoView({ block: 'center', inline: 'center' });
+      scrollToCentre(element);
       if (!visible(element)) fail('element not interactable', 'the element is not visible');
       element.focus?.();
       element.click();
