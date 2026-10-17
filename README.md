@@ -4,6 +4,9 @@ Test a [Tauri](https://tauri.app) app's real window with
 [seleniumbase-rs](https://github.com/MustCodeAl/seleniumbase-rs) (`BaseCase`
 and the `sbrs` CLI) on **macOS, Windows and Linux**.
 
+Documentation: <https://mustcodeal-seleniumbase-rs.docs7.io>
+(the [Tauri guide](https://mustcodeal-seleniumbase-rs.docs7.io/ecosystem/tauri) is part of that site).
+
 Tauri apps use the system webview. Windows (WebView2) and Linux (WebKitGTK)
 have WebDriver drivers, but **macOS (WKWebView) has none**. This plugin runs a
 small W3C WebDriver endpoint inside your app, so the same tests drive the app
