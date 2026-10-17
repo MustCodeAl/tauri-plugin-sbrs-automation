@@ -254,6 +254,16 @@ part of the view the element covers, after it is scrolled into view (also
 when the page is zoomed, as Tauri's `set_zoom` and the zoom hotkeys do). Windows
 (WebView2) and Linux (WebKitGTK) answer `unsupported operation` for now.
 
+## Changing the page script
+
+The page script is written in TypeScript in `src/bridge.ts`. `src/bridge.js` is
+generated from it and is what the plugin embeds, so apps that use the plugin
+build without Node or Bun. After editing `bridge.ts`, run `bun install` once and
+then `bun run bridge` (it builds `bridge.js` and records the SHA-256 of
+`bridge.ts` on its first line), and commit both files. `bunx tsc --noEmit`
+type-checks the source. `cargo test` fails, naming this command, when
+`bridge.js` is older than `bridge.ts`.
+
 ## How it works
 
 ```text
