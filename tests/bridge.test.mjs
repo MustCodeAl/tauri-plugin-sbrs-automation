@@ -484,3 +484,22 @@ test('an element screenshot in a frame with a border and padding is cut where th
   const area = await page.run('prop', { id: inside[KEY], what: 'viewrect' });
   assert.deepEqual(area, { x: 82, y: 92, width: 40, height: 10 });
 });
+
+test('releasing the actions succeeds when the frame entered has gone, and forgets what was held', async () => {
+  const page = new Page();
+  const frame = page.add('iframe', { id: 'frame', box: { left: 0, top: 0, width: 300, height: 200 } });
+  const body = new Element(page, 'body', { id: 'inner' });
+  const inner = { defaultView: { alert: () => {} }, activeElement: body, body, documentElement: body };
+  frame.contentDocument = inner;
+  frame.contentWindow = inner.defaultView;
+  await page.run('frame', { element: await page.ref(frame) });
+  await page.run('input', { actions: [{ source: 'keyboard', type: 'keyDown', value: 'a' }] });
+  // The page removes the frame while the key is held.
+  frame.isConnected = false;
+  assert.equal(await page.run('release', {}), null);
+  // Nothing is held any more, and the top page can be driven again.
+  await page.run('frame', { top: true });
+  const before = page.seen('keyup').length;
+  assert.equal(await page.run('release', {}), null);
+  assert.equal(page.seen('keyup').length, before);
+});

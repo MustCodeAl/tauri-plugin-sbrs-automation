@@ -621,6 +621,13 @@
     // the input state.
     release: () => {
       try {
+        // The frame entered may be gone: no event can reach it, and Release
+        // Actions does not fail for that, so only the state is forgotten.
+        try {
+          context();
+        } catch {
+          return null;
+        }
         for (const key of [...input.keys].reverse()) releaseKey({ value: key });
         for (const pointer of input.pointers.values()) {
           for (const button of [...pointer.buttons].reverse()) releasePointer(pointer, { button });
