@@ -1,0 +1,12 @@
+{
+  "name": "tauri-plugin-sbrs-automation-bridge",
+  "private": true,
+  "description": "Build tooling for src/bridge.js, the page script, generated from src/bridge.ts",
+  "scripts": {
+    "bridge": "bun scripts/bridge.mjs",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

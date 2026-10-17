@@ -769,23 +769,23 @@ mod tests {
         // Clients read an element only under this key (W3C WebDriver, "web
         // element identifier"); any other is not an element to them.
         assert_eq!(ELEMENT_KEY, "element-6066-11e4-a52e-4f735466cecf");
-        let script = include_str!("bridge.js");
+        let script = include_str!("bridge.ts");
         assert!(
             script.contains(&format!("const KEY = '{ELEMENT_KEY}';")),
-            "bridge.js names elements with another key"
+            "bridge.ts names elements with another key"
         );
     }
 
     #[test]
     fn the_page_script_serves_every_operation_the_driver_asks_for() {
-        let script = include_str!("bridge.js");
+        let script = include_str!("bridge.ts");
         for op in [
             "info", "go", "history", "find", "active", "prop", "click", "clear", "keys", "script",
             "dialog", "frame", "input", "release", "reset",
         ] {
             assert!(
                 script.contains(&format!("\n    {op}: ")),
-                "bridge.js has no `{op}` operation"
+                "bridge.ts has no `{op}` operation"
             );
         }
     }
