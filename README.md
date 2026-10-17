@@ -158,6 +158,7 @@ seleniumbase-rs.
 | `SBRS_AUTOMATION` | on in debug builds, off in release; `1` turns it on, `0` off |
 | `SBRS_AUTOMATION_PORT` | `4445`; if the port is taken (a second instance, a Selenium container), the app runs without the endpoint and says so on stderr |
 | `SBRS_AUTOMATION_TOKEN` | random, printed when the app starts |
+| `SBRS_AUTOMATION_TRACE_WINDOW` | off; any value makes each window command print the window's state on stderr before it asks for a change, after, and when it answers: what Tauri reports and, on macOS, what the `NSWindow` says (style mask, `isZoomed`, frame, content view, screen). For finding out why a resize did not stick |
 
 ## Supported commands
 
@@ -171,7 +172,7 @@ Every path starts with `/<token>`; session commands with
 | Timeouts | `GET`, `POST /timeouts` | `script`, `pageLoad`, `implicit` (finding looks again until it is over). |
 | Navigation | `POST /url`, `GET /url`, `GET /title`, `POST /back`, `/forward`, `/refresh` | Waits for the new page to load. |
 | Page source | `GET /source` | Of the current frame. |
-| Window | `GET /window`, `/window/handles`, `POST /window`, `GET`/`POST /window/rect`, `POST /window/maximize`, `/minimize`, `/fullscreen` | One window, `main`. |
+| Window | `GET /window`, `/window/handles`, `POST /window`, `GET`/`POST /window/rect`, `POST /window/maximize`, `/minimize`, `/fullscreen` | One window, `main`. Each change waits for the window (see below). |
 | Frames | `POST /frame`, `POST /frame/parent` | Same-origin frames only (see below). |
 | Find elements | `POST /element`, `/elements`, `/element/{id}/element`, `/element/{id}/elements`, `GET /element/active` | CSS, XPath, link text, partial link text, tag name. |
 | Element state | `GET /element/{id}/text`, `/name`, `/rect`, `/enabled`, `/selected`, `/displayed`, `/attribute/{name}`, `/property/{name}`, `/css/{name}` | |
@@ -180,6 +181,18 @@ Every path starts with `/<token>`; session commands with
 | Actions | `POST /actions`, `DELETE /actions` | Mouse, keys and pauses (see below). |
 | User prompts | `GET /alert/text`, `POST /alert/accept`, `/alert/dismiss`, `/alert/text` | Simulated (see below). |
 | Screenshots | `GET /screenshot`, `GET /element/{id}/screenshot` | macOS only; PNG. |
+
+**Window changes.** Tauri only queues a change of the window for the main
+thread, and the system applies it a little later (leaving full screen is an
+animation, over which a new size is lost). So Set Window Rect first brings the
+window back to its normal state (out of full screen, not maximized, not
+minimized), waiting until the window has left each state and its frame has
+stopped moving; then moves and resizes it; then waits, for at most two
+seconds, until the window has the size and keeps its rectangle, asking again
+if a request was lost. Maximize, Minimize and Fullscreen wait for their state
+in the same way. Each answers with the rectangle the window has *then*, which
+need not be the one asked for: the system keeps a window below the menu bar,
+and may refuse a size.
 
 **User prompts.** A page's `alert`, `confirm` and `prompt` stop the page
 until they are answered, and a page script cannot keep them open for a
