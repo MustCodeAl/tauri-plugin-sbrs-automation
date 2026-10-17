@@ -187,12 +187,16 @@ thread, and the system applies it a little later (leaving full screen is an
 animation, over which a new size is lost). So Set Window Rect first brings the
 window back to its normal state (out of full screen, not maximized, not
 minimized), waiting until the window has left each state and its frame has
-stopped moving; then moves and resizes it; then waits, for at most two
-seconds, until the window has the size and keeps its rectangle, asking again
-if a request was lost. Maximize, Minimize and Fullscreen wait for their state
-in the same way. Each answers with the rectangle the window has *then*, which
-need not be the one asked for: the system keeps a window below the menu bar,
-and may refuse a size.
+stopped moving; then moves and resizes it; then waits until the window has
+the size and the place and keeps its rectangle, asking again every quarter of
+a second if a request was lost, and giving up after two seconds. Normally
+this takes well under a second. The waits are bounded, not short: a window
+that does not leave a state is waited for up to three seconds (and then used
+as it is), so a command can take about five seconds at worst for one state
+change, more if the window goes through several states. Maximize, Minimize and
+Fullscreen wait for their state in the same way. Each answers with the
+rectangle the window has *then*, which need not be the one asked for: the
+system keeps a window below the menu bar, and may refuse a size.
 
 **User prompts.** A page's `alert`, `confirm` and `prompt` stop the page
 until they are answered, and a page script cannot keep them open for a

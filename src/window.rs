@@ -29,10 +29,10 @@ const SETTLED: Duration = Duration::from_millis(60);
 const LANDING: Duration = Duration::from_millis(100);
 /// How long a window may keep a rectangle that is not the asked one before the
 /// request is made again: a request made while the window changes state can be
-/// lost.
+/// lost. The request is made again every such while until [`RECT_TIMEOUT`], for
+/// a window may hold its old frame (and say it left a state) while an animation
+/// runs that swallows the request.
 const RETRY_AFTER: Duration = Duration::from_millis(250);
-/// How many times the request is made again.
-const RETRIES: u8 = 2;
 /// Sizes closer than this are the same: the system rounds to whole pixels.
 const TOLERANCE: f64 = 1.0;
 
@@ -118,14 +118,27 @@ impl RectRequest {
         self.width.is_some() || self.height.is_some()
     }
 
-    /// Whether `rect` has the size asked for (the position is not compared:
-    /// the system keeps a window below the menu bar).
+    /// Whether `rect` has the size asked for.
     fn is_sized(&self, rect: &WindowRect) -> bool {
         self.width
             .is_none_or(|width| (rect.width - width).abs() <= TOLERANCE)
             && self
                 .height
                 .is_none_or(|height| (rect.height - height).abs() <= TOLERANCE)
+    }
+
+    /// Whether `rect` is where the window was asked to be. The system keeps a
+    /// window below the menu bar, so it may be lower than asked (a larger `y`)
+    /// and that is taken as placed; a window higher than asked, or at another
+    /// `x`, has not had the move yet.
+    fn is_placed(&self, rect: &WindowRect) -> bool {
+        self.x.is_none_or(|x| (rect.x - x).abs() <= TOLERANCE)
+            && self.y.is_none_or(|y| rect.y >= y - TOLERANCE)
+    }
+
+    /// Whether `rect` is the one asked for, as far as the system allows.
+    fn is_met(&self, rect: &WindowRect) -> bool {
+        self.is_sized(rect) && self.is_placed(rect)
     }
 
     /// Asks `window` for the position and the size.
@@ -185,10 +198,10 @@ pub(crate) fn set_rect<W: NativeWindow + ?Sized>(
 
 /// Whether `a` and `b` are the same rectangle, to the pixel.
 fn same(a: &WindowRect, b: &WindowRect) -> bool {
-    (a.x - b.x).abs() < TOLERANCE
-        && (a.y - b.y).abs() < TOLERANCE
-        && (a.width - b.width).abs() < TOLERANCE
-        && (a.height - b.height).abs() < TOLERANCE
+    (a.x - b.x).abs() <= TOLERANCE
+        && (a.y - b.y).abs() <= TOLERANCE
+        && (a.width - b.width).abs() <= TOLERANCE
+        && (a.height - b.height).abs() <= TOLERANCE
 }
 
 /// Waits until `done` holds for the window's states. Gives up after
@@ -212,10 +225,10 @@ fn wait_for_state<W: NativeWindow + ?Sized>(
 }
 
 /// Waits until the window's rectangle has stopped changing, and returns it.
-/// With a `request`, also until the window has the size it asked for, asking
-/// again when the window stays as it is: a request made while the window
-/// changes state can be lost. Gives up after [`RECT_TIMEOUT`] and returns the
-/// rectangle as it is.
+/// With a `request`, also until the window has the size and the place it asked
+/// for, asking again when the window stays as it is: a request made while the
+/// window changes state can be lost. Gives up after [`RECT_TIMEOUT`] and
+/// returns the rectangle as it is.
 fn settle<W: NativeWindow + ?Sized>(
     window: &W,
     clock: &dyn Clock,
@@ -225,7 +238,6 @@ fn settle<W: NativeWindow + ?Sized>(
     let mut seen = window.rect()?;
     // When `seen` was first seen.
     let mut since = started;
-    let mut retries = 0;
     loop {
         clock.sleep(POLL);
         let rect = window.rect()?;
@@ -235,18 +247,17 @@ fn settle<W: NativeWindow + ?Sized>(
             since = now;
         }
         let kept_for = now.saturating_sub(since);
-        let sized = request.is_none_or(|request| request.is_sized(&rect));
+        let met = request.is_none_or(|request| request.is_met(&rect));
         // A request lands within a turn of the main thread, but not at once:
         // the rectangle is not taken for settled before it had its time.
         let landed = now.saturating_sub(started) >= LANDING;
-        if landed && kept_for >= SETTLED && sized {
+        if landed && kept_for >= SETTLED && met {
             return Ok(rect);
         }
-        if !sized && kept_for >= RETRY_AFTER && retries < RETRIES {
+        if !met && kept_for >= RETRY_AFTER {
             if let Some(request) = request {
                 request.apply(window)?;
             }
-            retries += 1;
             since = now;
         }
         if now.saturating_sub(started) >= RECT_TIMEOUT {
@@ -260,20 +271,25 @@ fn settle<W: NativeWindow + ?Sized>(
 /// window reports it has, and then until the frame stops moving: leaving full
 /// screen is an animation, over which a new size is lost. The window is looked
 /// at again after each state, because leaving one can bring another back (a
-/// window that was maximized comes back from full screen maximized).
+/// window that was maximized comes back from full screen maximized). A window
+/// that does not leave a state in [`STATE_TIMEOUT`] is not asked again: it is
+/// used as it is.
 fn restore<W: NativeWindow + ?Sized>(window: &W, clock: &dyn Clock) -> Result<(), WebDriverError> {
     for _ in 0..4 {
         let flags = window.flags()?;
-        if flags.fullscreen {
+        let left = if flags.fullscreen {
             window.leave_fullscreen()?;
-            wait_for_state(window, clock, |flags| !flags.fullscreen)?;
+            wait_for_state(window, clock, |flags| !flags.fullscreen)?
         } else if flags.maximized {
             window.unmaximize()?;
-            wait_for_state(window, clock, |flags| !flags.maximized)?;
+            wait_for_state(window, clock, |flags| !flags.maximized)?
         } else if flags.minimized {
             window.unminimize()?;
-            wait_for_state(window, clock, |flags| !flags.minimized)?;
+            wait_for_state(window, clock, |flags| !flags.minimized)?
         } else {
+            break;
+        };
+        if !left {
             break;
         }
         settle(window, clock, None)?;
@@ -402,6 +418,9 @@ mod tests {
         animation: Option<(Duration, Duration, WindowRect, WindowRect)>,
         resizes_asked: u32,
         resizes_to_lose: u32,
+        moves_asked: u32,
+        moves_to_lose: u32,
+        leaves_asked: u32,
     }
 
     /// A window that applies each call some time after it: leaving full screen
@@ -416,6 +435,11 @@ mod tests {
         refuses_sizes: bool,
         /// A window that was maximized before full screen comes back maximized.
         returns_maximized: bool,
+        /// While it leaves full screen the window says it has, but its frame
+        /// stays the full screen one until the animation is over.
+        holds_frame: bool,
+        /// A window that never leaves full screen.
+        ignores_leaving: bool,
     }
 
     /// The window maximized: the screen below the menu bar and above the dock.
@@ -452,11 +476,16 @@ mod tests {
                     animation: None,
                     resizes_asked: 0,
                     resizes_to_lose: 0,
+                    moves_asked: 0,
+                    moves_to_lose: 0,
+                    leaves_asked: 0,
                 }),
                 latency: Duration::from_millis(40),
                 transition: Duration::from_millis(700),
                 refuses_sizes: false,
                 returns_maximized: false,
+                holds_frame: false,
+                ignores_leaving: false,
             }
         }
 
@@ -485,6 +514,21 @@ mod tests {
 
         fn losing_the_first_resizes(self, count: u32) -> Self {
             self.state.borrow_mut().resizes_to_lose = count;
+            self
+        }
+
+        fn losing_the_first_moves(self, count: u32) -> Self {
+            self.state.borrow_mut().moves_to_lose = count;
+            self
+        }
+
+        fn holding_its_frame_while_it_leaves(mut self) -> Self {
+            self.holds_frame = true;
+            self
+        }
+
+        fn never_leaving_full_screen(mut self) -> Self {
+            self.ignores_leaving = true;
             self
         }
 
@@ -522,7 +566,8 @@ mod tests {
             let normal_state = state.flags == WindowFlags::default();
             match op {
                 Op::LeaveFullscreen => {
-                    if state.flags.fullscreen {
+                    state.leaves_asked += 1;
+                    if state.flags.fullscreen && !self.ignores_leaving {
                         // Like the window of Tauri, it says at once that it is
                         // not full screen, and goes on animating for a while.
                         state.flags.fullscreen = false;
@@ -558,7 +603,10 @@ mod tests {
                 Op::Unminimize => state.flags.minimized = false,
                 Op::Minimize => state.flags.minimized = true,
                 Op::MoveTo(x, y) => {
-                    if !in_transition && !state.flags.fullscreen {
+                    state.moves_asked += 1;
+                    if state.moves_to_lose > 0 {
+                        state.moves_to_lose -= 1;
+                    } else if !in_transition && !state.flags.fullscreen {
                         state.rect.x = x;
                         state.rect.y = y.max(MENU_BAR);
                         state.normal = state.rect;
@@ -589,6 +637,7 @@ mod tests {
             let state = self.state.borrow();
             let now = self.clock.now();
             Ok(match state.animation {
+                Some((_, end, from, _)) if now < end && self.holds_frame => from,
                 Some((start, end, from, to)) if now < end => {
                     let part = (now - start).as_secs_f64() / (end - start).as_secs_f64();
                     let between = |a: f64, b: f64| a + (b - a) * part;
@@ -716,8 +765,9 @@ mod tests {
         let (clock, sim) = setup(Sim::refusing_sizes);
         let rect = set_rect(&sim, &*clock, all(900.0, 700.0)).unwrap();
         assert_eq!((rect.width, rect.height), (START.width, START.height));
-        // Asked three times (once, and twice more), then given up.
-        assert_eq!(sim.state.borrow().resizes_asked, 3);
+        // Asked again every 250 ms until the wait is over, then given up.
+        let asked = sim.state.borrow().resizes_asked;
+        assert!((3..=10).contains(&asked), "asked {asked} times");
         assert!(
             clock.now() <= RECT_TIMEOUT + Duration::from_millis(100),
             "waited {:?}",
@@ -799,5 +849,49 @@ mod tests {
         let rect = fullscreen(&sim, &*clock).unwrap();
         assert!(sim.flags().unwrap().fullscreen);
         assert_eq!((rect.width, rect.height), (SCREEN.width, SCREEN.height));
+    }
+
+    #[test]
+    fn a_window_that_keeps_its_old_frame_while_it_leaves_full_screen_gets_the_size_in_the_end() {
+        // The window says at once it is not full screen but its frame does not
+        // move for 700 ms, so the frame never looks like one in motion, and the
+        // first requests are lost: they are made again until one lands.
+        let (clock, sim) = setup(|sim| {
+            sim.starting_full_screen()
+                .holding_its_frame_while_it_leaves()
+        });
+        let rect = set_rect(&sim, &*clock, all(900.0, 700.0)).unwrap();
+        assert_eq!((rect.width, rect.height), (900.0, 700.0));
+        assert!(
+            clock.now() <= STATE_TIMEOUT + RECT_TIMEOUT,
+            "waited {:?}",
+            clock.now()
+        );
+    }
+
+    #[test]
+    fn a_move_the_window_lost_is_asked_again() {
+        let (clock, sim) = setup(|sim| sim.losing_the_first_moves(1));
+        let request = RectRequest {
+            x: Some(10.0),
+            y: Some(200.0),
+            width: None,
+            height: None,
+        };
+        let rect = set_rect(&sim, &*clock, request).unwrap();
+        assert_eq!((rect.x, rect.y), (10.0, 200.0));
+        assert_eq!(sim.state.borrow().moves_asked, 2);
+    }
+
+    #[test]
+    fn a_window_that_does_not_leave_full_screen_is_asked_once_and_used_as_it_is() {
+        let (clock, sim) = setup(|sim| sim.starting_full_screen().never_leaving_full_screen());
+        set_rect(&sim, &*clock, all(900.0, 700.0)).unwrap();
+        assert_eq!(sim.state.borrow().leaves_asked, 1);
+        assert!(
+            clock.now() <= STATE_TIMEOUT + RECT_TIMEOUT + Duration::from_millis(200),
+            "waited {:?}",
+            clock.now()
+        );
     }
 }
