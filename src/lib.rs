@@ -190,6 +190,22 @@ fn window_error(error: tauri::Error) -> WebDriverError {
 }
 
 /// The window's outer rectangle in logical (CSS) pixels.
+/// Brings the window back to its normal state, as WebDriver's Set Window Rect
+/// asks before it moves or resizes: out of full screen, not maximized, not
+/// minimized.
+fn restore<R: Runtime>(window: &WebviewWindow<R>) -> tauri::Result<()> {
+    if window.is_fullscreen()? {
+        window.set_fullscreen(false)?;
+    }
+    if window.is_maximized()? {
+        window.unmaximize()?;
+    }
+    if window.is_minimized()? {
+        window.unminimize()?;
+    }
+    Ok(())
+}
+
 fn outer_rect<R: Runtime>(window: &WebviewWindow<R>) -> tauri::Result<WindowRect> {
     let scale = window.scale_factor()?;
     let position = window.outer_position()?.to_logical::<f64>(scale);
@@ -244,6 +260,10 @@ impl<R: Runtime> Bridge for TauriBridge<R> {
                 width,
                 height,
             } => {
+                // Set Window Rect restores the window first: out of full
+                // screen, not maximized, not minimized. A maximized window
+                // ignores a new size, so skipping this leaves it unchanged.
+                restore(&window).map_err(window_error)?;
                 let now = outer_rect(&window).map_err(window_error)?;
                 if x.is_some() || y.is_some() {
                     let position = LogicalPosition::new(x.unwrap_or(now.x), y.unwrap_or(now.y));
@@ -264,7 +284,12 @@ impl<R: Runtime> Bridge for TauriBridge<R> {
                     window.set_size(size).map_err(window_error)?;
                 }
             }
-            WindowCommand::Maximize => window.maximize().map_err(window_error)?,
+            WindowCommand::Maximize => {
+                if window.is_fullscreen().map_err(window_error)? {
+                    window.set_fullscreen(false).map_err(window_error)?;
+                }
+                window.maximize().map_err(window_error)?;
+            }
             WindowCommand::Minimize => window.minimize().map_err(window_error)?,
             WindowCommand::Fullscreen => window.set_fullscreen(true).map_err(window_error)?,
         }
