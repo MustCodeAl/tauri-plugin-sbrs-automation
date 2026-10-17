@@ -18,7 +18,9 @@
 //! capability file. It is on in debug builds only, unless `SBRS_AUTOMATION=1`
 //! turns it on (or `SBRS_AUTOMATION=0` off). It listens on `127.0.0.1` port
 //! `SBRS_AUTOMATION_PORT` (default 4445), at a path that starts with a secret
-//! token: `SBRS_AUTOMATION_TOKEN`, or a random one printed at start-up.
+//! token: `SBRS_AUTOMATION_TOKEN`, or a random one printed at start-up. With
+//! `SBRS_AUTOMATION_TRACE_WINDOW` set, the window commands print the window's
+//! state on stderr, for finding out why a resize did not stick.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -28,14 +30,19 @@ use std::time::Duration;
 
 use serde_json::Value;
 use tauri::plugin::TauriPlugin;
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, Runtime, State, WebviewWindow};
+use tauri::{AppHandle, Manager, Runtime, State, WebviewWindow};
 
+mod native;
 #[cfg(target_os = "macos")]
 mod screenshot;
 mod server;
+mod trace;
 pub mod webdriver;
+mod window;
 
+use native::Native;
 use webdriver::{Bridge, Driver, ViewportRect, WebDriverError, WindowCommand, WindowRect};
+use window::{RectRequest, SystemClock};
 
 /// The default port of the WebDriver endpoint.
 pub const DEFAULT_PORT: u16 = 4445;
@@ -184,40 +191,6 @@ impl<R: Runtime> TauriBridge<R> {
     }
 }
 
-/// A window operation that failed, as a WebDriver error.
-fn window_error(error: tauri::Error) -> WebDriverError {
-    WebDriverError::new("unknown error", format!("the window refused: {error}"))
-}
-
-/// The window's outer rectangle in logical (CSS) pixels.
-/// Brings the window back to its normal state, as WebDriver's Set Window Rect
-/// asks before it moves or resizes: out of full screen, not maximized, not
-/// minimized.
-fn restore<R: Runtime>(window: &WebviewWindow<R>) -> tauri::Result<()> {
-    if window.is_fullscreen()? {
-        window.set_fullscreen(false)?;
-    }
-    if window.is_maximized()? {
-        window.unmaximize()?;
-    }
-    if window.is_minimized()? {
-        window.unminimize()?;
-    }
-    Ok(())
-}
-
-fn outer_rect<R: Runtime>(window: &WebviewWindow<R>) -> tauri::Result<WindowRect> {
-    let scale = window.scale_factor()?;
-    let position = window.outer_position()?.to_logical::<f64>(scale);
-    let size = window.outer_size()?.to_logical::<f64>(scale);
-    Ok(WindowRect {
-        x: position.x,
-        y: position.y,
-        width: size.width,
-        height: size.height,
-    })
-}
-
 impl<R: Runtime> Bridge for TauriBridge<R> {
     fn call(&self, op: &str, args: Value, timeout: Duration) -> Result<Value, WebDriverError> {
         let window = self.driven_window()?;
@@ -252,48 +225,31 @@ impl<R: Runtime> Bridge for TauriBridge<R> {
 
     fn window(&self, command: WindowCommand) -> Result<WindowRect, WebDriverError> {
         let window = self.driven_window()?;
+        let native = Native::new(&window);
+        let clock = SystemClock::new();
+        // Each command waits until the window has changed before it answers
+        // (see `window.rs`): Tauri only queues a change for the main thread.
         match command {
-            WindowCommand::Rect => {}
+            WindowCommand::Rect => window::current_rect(&native),
             WindowCommand::SetRect {
                 x,
                 y,
                 width,
                 height,
-            } => {
-                // Set Window Rect restores the window first: out of full
-                // screen, not maximized, not minimized. A maximized window
-                // ignores a new size, so skipping this leaves it unchanged.
-                restore(&window).map_err(window_error)?;
-                let now = outer_rect(&window).map_err(window_error)?;
-                if x.is_some() || y.is_some() {
-                    let position = LogicalPosition::new(x.unwrap_or(now.x), y.unwrap_or(now.y));
-                    window.set_position(position).map_err(window_error)?;
-                }
-                if width.is_some() || height.is_some() {
-                    // Tauri sizes the inside of the window, WebDriver the
-                    // outside: take the frame off.
-                    let scale = window.scale_factor().map_err(window_error)?;
-                    let inner = window
-                        .inner_size()
-                        .map_err(window_error)?
-                        .to_logical::<f64>(scale);
-                    let size = LogicalSize::new(
-                        (width.unwrap_or(now.width) - (now.width - inner.width)).max(1.0),
-                        (height.unwrap_or(now.height) - (now.height - inner.height)).max(1.0),
-                    );
-                    window.set_size(size).map_err(window_error)?;
-                }
-            }
-            WindowCommand::Maximize => {
-                if window.is_fullscreen().map_err(window_error)? {
-                    window.set_fullscreen(false).map_err(window_error)?;
-                }
-                window.maximize().map_err(window_error)?;
-            }
-            WindowCommand::Minimize => window.minimize().map_err(window_error)?,
-            WindowCommand::Fullscreen => window.set_fullscreen(true).map_err(window_error)?,
+            } => window::set_rect(
+                &native,
+                &clock,
+                RectRequest {
+                    x,
+                    y,
+                    width,
+                    height,
+                },
+            ),
+            WindowCommand::Maximize => window::maximize(&native, &clock),
+            WindowCommand::Minimize => window::minimize(&native, &clock),
+            WindowCommand::Fullscreen => window::fullscreen(&native, &clock),
         }
-        outer_rect(&window).map_err(window_error)
     }
 
     #[cfg(target_os = "macos")]
