@@ -9,11 +9,23 @@ repository = "https://github.com/MustCodeAl/tauri-plugin-sbrs-automation"
 links = "tauri-plugin-sbrs-automation"
 keywords = ["tauri", "webdriver", "testing", "automation", "seleniumbase"]
 
+[features]
+default = []
+# Optional Chromium configuration; reuse the canonical flag generator (Rust 1.99).
+cdp = ["dep:seleniumbase-rs"]
+
+[[test]]
+name = "cdp_env"
+path = "tests/cdp_env.rs"
+harness = false
+required-features = ["cdp"]
+
 [dependencies]
 tauri = { version = "=3.0.0-alpha.4", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny_http = "0.12"
+seleniumbase-rs = { git = "https://github.com/MustCodeAl/seleniumbase-rs", rev = "5d329b511453a57b7195c96c6aa1537f3fc379d3", default-features = false, optional = true }
 
 [build-dependencies]
 tauri-plugin = { version = "=3.0.0-alpha.3", features = ["build"] }

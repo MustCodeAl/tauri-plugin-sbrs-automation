@@ -32,6 +32,7 @@ use serde_json::Value;
 use tauri::plugin::TauriPlugin;
 use tauri::{AppHandle, Manager, Runtime, State, WebviewWindow};
 
+pub mod cdp;
 mod native;
 #[cfg(target_os = "macos")]
 mod screenshot;
@@ -84,15 +85,18 @@ struct Settings {
 }
 
 impl Settings {
+    fn automation_enabled() -> bool {
+        match std::env::var("SBRS_AUTOMATION").ok().as_deref() {
+            Some("0" | "false" | "off") => false,
+            Some(value) if !value.is_empty() => true,
+            _ => cfg!(debug_assertions),
+        }
+    }
+
     fn from_env() -> Self {
         let var = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
-        let enabled = match var("SBRS_AUTOMATION").as_deref() {
-            Some("0" | "false" | "off") => false,
-            Some(_) => true,
-            None => cfg!(debug_assertions),
-        };
         Self {
-            enabled,
+            enabled: Self::automation_enabled(),
             port: var("SBRS_AUTOMATION_PORT")
                 .and_then(|port| port.parse().ok())
                 .unwrap_or(DEFAULT_PORT),

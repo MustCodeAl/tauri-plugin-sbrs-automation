@@ -234,6 +234,14 @@ impl<B: Bridge> Driver<B> {
             ("GET", ["status"]) => {
                 Ok(json!({ "ready": true, "message": "tauri-plugin-sbrs-automation is ready" }))
             }
+            ("GET", ["cdp"]) => {
+                let port = crate::cdp::active_port();
+                Ok(json!({
+                    "cdpEnabled": port.is_some(),
+                    "cdpPort": port,
+                    "cdpUrl": port.map(|port| format!("http://127.0.0.1:{port}")),
+                }))
+            }
             ("POST", ["session"]) => self.new_session(),
             ("DELETE", ["session", id]) => {
                 self.check_session(id)?;

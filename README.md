@@ -119,6 +119,18 @@ everywhere.
    `RuntimeNotConfigured`: depend on `tauri-runtime-wry` (the same alpha) and
    call `.runtime(tauri_runtime_wry::Wry::default())` on the builder.
 
+## Optional Chromium CDP integration
+
+Enable the `cdp` feature for app-owned CEF or Windows WebView2 (Rust 1.99).
+`cdp::CdpStealthConfig` reuses seleniumbase-rs's canonical stealth arguments
+through a pinned Git dependency. The authenticated `GET /<token>/cdp` route
+advertises `SBRS_CDP_PORT`; `/status` and the WebDriver bridge stay unchanged.
+
+Runtime setup, environment safety, direct attachment, fingerprint stealth and
+seleniumbase-rs plugin support are documented in the main repository's
+[Tauri guide](https://mustcodeal-seleniumbase-rs.docs7.io/ecosystem/tauri#app-owned-chromium-cef-and-webview2)
+([source](https://github.com/MustCodeAl/seleniumbase-rs/blob/main/docs/ecosystem/tauri.md)).
+
 ## Run a test
 
 Start the app with a token of your choice (or read the random one it prints):

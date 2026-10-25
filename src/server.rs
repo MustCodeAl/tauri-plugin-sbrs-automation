@@ -161,5 +161,13 @@ mod tests {
         );
         let page = get(addr, "/abc/status", "Origin: https://evil.example\r\n");
         assert!(page.starts_with("HTTP/1.1 403"), "{page}");
+        let cdp = get(addr, "/abc/cdp", "");
+        assert!(
+            cdp.starts_with("HTTP/1.1 200") && cdp.contains("\"cdpEnabled\""),
+            "{cdp}"
+        );
+        let page = get(addr, "/abc/cdp", "Origin: null\r\n");
+        assert!(page.starts_with("HTTP/1.1 403"), "{page}");
+        assert!(get(addr, "/abcX/cdp", "").starts_with("HTTP/1.1 404"));
     }
 }
