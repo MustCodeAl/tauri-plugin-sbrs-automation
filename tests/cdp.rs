@@ -41,7 +41,5 @@ fn chromium_configuration_is_available_to_an_app() {
         .chromium_args();
     assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_owned()));
     assert!(args.contains(&"--remote-debugging-port=9333".to_owned()));
-    for arg in seleniumbase_rs::stealth::engine_spoofing_args() {
-        assert!(args.contains(&arg), "missing canonical argument: {arg}");
-    }
+    assert!(args.contains(&"--disable-blink-features=AutomationControlled".to_owned()));
 }

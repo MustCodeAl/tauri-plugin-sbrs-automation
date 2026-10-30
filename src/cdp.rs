@@ -14,7 +14,7 @@ pub(crate) fn active_port() -> Option<u16> {
         .filter(|port| *port != 0)
 }
 
-/// Chromium launch settings for CEF or WebView2 (feature `cdp`, Rust 1.99).
+/// Chromium launch settings for CEF or WebView2 (feature `cdp`).
 ///
 /// ```
 /// # #[cfg(feature = "cdp")] {
@@ -28,7 +28,7 @@ pub(crate) fn active_port() -> Option<u16> {
 pub struct CdpStealthConfig {
     /// `SBRS_CDP_PORT`, or 9222. Port zero uses 9222 rather than an undiscoverable port.
     pub debugging_port: u16,
-    /// Include seleniumbase-rs's canonical engine stealth arguments (default true).
+    /// Include the engine stealth arguments (default true).
     pub stealth_args: bool,
     /// Additional trusted arguments. Remote-debugging switches are reserved.
     pub extra_args: Vec<String>,
@@ -86,7 +86,7 @@ impl CdpStealthConfig {
             "--remote-debugging-address=127.0.0.1".to_owned(),
         ];
         if self.stealth_args {
-            args.extend(seleniumbase_rs::stealth::engine_spoofing_args());
+            args.extend(ENGINE_ARGS.iter().map(|arg| (*arg).to_owned()));
         }
         args.extend(
             self.extra_args
@@ -146,6 +146,34 @@ impl CdpStealthConfig {
     }
 }
 
+/// Chromium launch flags that reduce engine-level automation signals: a local
+/// copy of `seleniumbase_rs::stealth::engine_spoofing_args()` (seleniumbase-rs,
+/// `src/stealth/patcher.rs`), kept here so the plugin needs no dependency on it.
+#[cfg(feature = "cdp")]
+const ENGINE_ARGS: [&str; 21] = [
+    "--disable-blink-features=AutomationControlled",
+    "--disable-features=IsolateOrigins,site-per-process,PrivacySandboxSettings4,InterestFeedContentSuggestions,FedCm,WebRtcHideLocalIpsWithMdns",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-background-networking",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-client-side-phishing-detection",
+    "--disable-default-apps",
+    "--disable-hang-monitor",
+    "--disable-popup-blocking",
+    "--disable-prompt-on-repost",
+    "--disable-sync",
+    "--disable-translate",
+    "--metrics-recording-only",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--no-pings",
+    "--password-store=basic",
+    "--use-mock-keychain",
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+];
+
 /// Quotes one argument using the Windows command-line backslash/quote rules.
 #[cfg(feature = "cdp")]
 fn webview2_argument(arg: &str) -> String {
@@ -176,7 +204,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_flags_use_the_canonical_generator() {
+    fn the_flags_are_the_local_engine_arguments() {
         let config = CdpStealthConfig::default()
             .debugging_port(9333)
             .arg("--lang=en-US");
@@ -188,8 +216,7 @@ mod tests {
                 "--remote-debugging-address=127.0.0.1"
             ]
         );
-        let canonical = seleniumbase_rs::stealth::engine_spoofing_args();
-        assert_eq!(&args[2..args.len() - 1], canonical);
+        assert_eq!(&args[2..args.len() - 1], ENGINE_ARGS);
         assert_eq!(args.last().unwrap(), "--lang=en-US");
     }
 
