@@ -167,7 +167,7 @@ seleniumbase-rs.
 
 | Setting | Default |
 |---|---|
-| `SBRS_AUTOMATION` | on in debug builds, off in release; `1` turns it on, `0` off |
+| `SBRS_AUTOMATION` | unset: on in debug builds, off in release. `1`, `true` or `on` (any case) turn it on; any other value, `0` or a typo included, turns it off |
 | `SBRS_AUTOMATION_PORT` | `4445`; if the port is taken (a second instance, a Selenium container), the app runs without the endpoint and says so on stderr |
 | `SBRS_AUTOMATION_TOKEN` | random, printed when the app starts |
 | `SBRS_AUTOMATION_TRACE_WINDOW` | off; any value makes each window command print the window's state on stderr before it asks for a change, after, and when it answers: what Tauri reports and, on macOS, what the `NSWindow` says (style mask, `isZoomed`, frame, content view, screen). For finding out why a resize did not stick |
@@ -314,7 +314,7 @@ Tauri's IPC.
 The endpoint can run any JavaScript in your app's window; that is what
 WebDriver's "execute script" is for. So it is guarded:
 
-- on in debug builds only, unless you set `SBRS_AUTOMATION=1`;
+- on in debug builds only, unless you set `SBRS_AUTOMATION` to `1`, `true` or `on` (a typo turns it off);
 - listens on `127.0.0.1` only;
 - every URL must start with the secret token;
 - requests from web pages (any request with an `Origin` header) are refused.

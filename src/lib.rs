@@ -15,8 +15,9 @@
 //! ```
 //!
 //! The plugin also needs the `sbrs-automation:default` permission in the app's
-//! capability file. It is on in debug builds only, unless `SBRS_AUTOMATION=1`
-//! turns it on (or `SBRS_AUTOMATION=0` off). It listens on `127.0.0.1` port
+//! capability file. It is on in debug builds only, unless `SBRS_AUTOMATION`
+//! says otherwise: `1`, `true` or `on` turn it on, any other value (`0`, or a
+//! typo) turns it off. It listens on `127.0.0.1` port
 //! `SBRS_AUTOMATION_PORT` (default 4445), at a path that starts with a secret
 //! token: `SBRS_AUTOMATION_TOKEN`, or a random one printed at start-up. With
 //! `SBRS_AUTOMATION_TRACE_WINDOW` set, the window commands print the window's
@@ -86,11 +87,10 @@ struct Settings {
 
 impl Settings {
     fn automation_enabled() -> bool {
-        match std::env::var("SBRS_AUTOMATION").ok().as_deref() {
-            Some("0" | "false" | "off") => false,
-            Some(value) if !value.is_empty() => true,
-            _ => cfg!(debug_assertions),
-        }
+        automation_gate(
+            std::env::var_os("SBRS_AUTOMATION").as_deref(),
+            cfg!(debug_assertions),
+        )
     }
 
     fn from_env() -> Self {
@@ -103,6 +103,22 @@ impl Settings {
             token: var("SBRS_AUTOMATION_TOKEN").unwrap_or_else(random_token),
         }
     }
+}
+
+/// Whether automation is on, given the value of `SBRS_AUTOMATION` (`None`
+/// when unset) and whether this is a debug build. Unset follows the build
+/// (on in debug builds only); `1`, `true` and `on` turn it on, in any case;
+/// every other value turns it off.
+fn automation_gate(value: Option<&std::ffi::OsStr>, debug_build: bool) -> bool {
+    // Fail closed: a value that is set turns automation on only when it says
+    // so. A typo (`ture`), an empty value or text that is not UTF-8 is off.
+    value.map_or(debug_build, |value| {
+        value.to_str().is_some_and(|value| {
+            ["1", "true", "on"]
+                .iter()
+                .any(|on| value.eq_ignore_ascii_case(on))
+        })
+    })
 }
 
 /// 128 bits from the standard library's randomly seeded hasher keys: enough
@@ -268,5 +284,48 @@ impl<R: Runtime> Bridge for TauriBridge<R> {
             "unsupported operation",
             "screenshots are taken on macOS only so far (WebView2 and WebKitGTK are not done)",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::automation_gate;
+    use std::ffi::OsStr;
+
+    fn gate(value: &str, debug_build: bool) -> bool {
+        automation_gate(Some(OsStr::new(value)), debug_build)
+    }
+
+    #[test]
+    fn unset_follows_the_build_profile() {
+        assert!(automation_gate(None, true));
+        assert!(!automation_gate(None, false));
+    }
+
+    #[test]
+    fn only_one_true_and_on_turn_it_on() {
+        for value in ["1", "true", "on", "TRUE", "On"] {
+            assert!(gate(value, false), "{value} in a release build");
+            assert!(gate(value, true), "{value} in a debug build");
+        }
+    }
+
+    #[test]
+    fn anything_else_turns_it_off_even_in_a_debug_build() {
+        for value in [
+            "0", "false", "off", "OFF", "no", "yes", "enabled", "2", "maybe", "", " ", " 1", "1 ",
+            "truee", "-1", "y",
+        ] {
+            assert!(!gate(value, true), "{value:?} in a debug build");
+            assert!(!gate(value, false), "{value:?} in a release build");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_value_that_is_not_text_turns_it_off() {
+        use std::os::unix::ffi::OsStrExt;
+        let value = OsStr::from_bytes(&[0x31, 0xff]);
+        assert!(!automation_gate(Some(value), true));
     }
 }
