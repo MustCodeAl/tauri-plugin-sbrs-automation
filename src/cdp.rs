@@ -20,7 +20,10 @@ pub(crate) fn active_port() -> Option<u16> {
 /// # #[cfg(feature = "cdp")] {
 /// use tauri_plugin_sbrs_automation::cdp::CdpStealthConfig;
 /// let config = CdpStealthConfig::default().debugging_port(9333);
-/// assert!(config.chromium_args().contains(&"--remote-debugging-port=9333".into()));
+/// // Nothing at all when automation is off (a release build without
+/// // `SBRS_AUTOMATION=1`).
+/// let args = config.chromium_args();
+/// assert!(args.is_empty() || args.contains(&"--remote-debugging-port=9333".into()));
 /// # }
 /// ```
 #[cfg(feature = "cdp")]
@@ -78,10 +81,26 @@ impl CdpStealthConfig {
         self
     }
 
-    /// Returns loopback debugging switches, the opt-in stealth flags, and extra arguments.
-    /// Reserved debugging switches in `extra_args` cannot override the local endpoint.
+    /// Returns the loopback debugging switches, the opt-in stealth flags and
+    /// the extra arguments, or nothing at all when the plugin's automation
+    /// gate is off (a release build without `SBRS_AUTOMATION=1`): an app that
+    /// passes the result to CEF cannot open a debugging port in a release
+    /// build, whatever it calls. Add the app's own permanent arguments
+    /// yourself rather than through [`extra_args`](Self::extra_args), which
+    /// are dropped with the rest.
+    /// Reserved debugging switches in `extra_args` are dropped, so they cannot
+    /// override the local endpoint.
     #[must_use]
     pub fn chromium_args(&self) -> Vec<String> {
+        self.args_with(crate::Settings::automation_enabled())
+    }
+
+    /// [`chromium_args`](Self::chromium_args) for a given state of the
+    /// automation gate: nothing at all when it is off.
+    fn args_with(&self, automation: bool) -> Vec<String> {
+        if !automation {
+            return Vec::new();
+        }
         let port = if self.debugging_port == 0 {
             9222
         } else {
@@ -232,10 +251,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn nothing_is_produced_when_automation_is_off() {
+        // A release build must not open a debugging port, whatever the app
+        // asked for: not the port, not the stealth flags, not the extras.
+        let config = CdpStealthConfig::default()
+            .debugging_port(9333)
+            .stealth_args(true)
+            .arg("--lang=en-US");
+        assert!(config.args_with(false).is_empty());
+        let on = config.args_with(true);
+        assert!(on.contains(&"--remote-debugging-port=9333".to_owned()));
+        assert!(on.contains(&"--remote-debugging-address=127.0.0.1".to_owned()));
+    }
+
+    #[test]
     fn stealth_arguments_are_off_by_default() {
         let config = CdpStealthConfig::default();
         assert!(!config.stealth_args);
-        let args = config.chromium_args();
+        let args = config.args_with(true);
         assert_eq!(args.len(), 2, "{args:?}");
         assert!(args[0].starts_with("--remote-debugging-port="), "{args:?}");
         assert_eq!(args[1], "--remote-debugging-address=127.0.0.1");
@@ -263,7 +296,7 @@ mod tests {
         // and WebRTC's hiding of the local address.
         let args = CdpStealthConfig::default()
             .stealth_args(true)
-            .chromium_args()
+            .args_with(true)
             .join(" ");
         for weakening in [
             "--disable-features",
@@ -289,7 +322,7 @@ mod tests {
             .debugging_port(9333)
             .stealth_args(true)
             .arg("--lang=en-US");
-        let args = config.chromium_args();
+        let args = config.args_with(true);
         assert_eq!(
             &args[..2],
             [
@@ -306,7 +339,7 @@ mod tests {
         let args = CdpStealthConfig::default()
             .debugging_port(9222)
             .stealth_args(false)
-            .chromium_args();
+            .args_with(true);
         assert_eq!(
             args,
             [
@@ -335,7 +368,7 @@ mod tests {
             "--remote-debugging-\"port\"=9999",
             "--EDGE-WEBVIEW-SWITCHES=x",
         ] {
-            let args = CdpStealthConfig::default().arg(arg).chromium_args();
+            let args = CdpStealthConfig::default().arg(arg).args_with(true);
             assert!(!args.contains(&arg.to_owned()), "{arg} reached {args:?}");
         }
     }
@@ -345,7 +378,7 @@ mod tests {
         let args = CdpStealthConfig::default()
             .arg("--lang=en-US")
             .arg("--user-agent=Tests/1.0")
-            .chromium_args();
+            .args_with(true);
         assert!(args.contains(&"--lang=en-US".to_owned()));
         assert!(args.contains(&"--user-agent=Tests/1.0".to_owned()));
     }

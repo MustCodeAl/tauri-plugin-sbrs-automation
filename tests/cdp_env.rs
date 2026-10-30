@@ -20,15 +20,18 @@ fn main() {
         return;
     }
     let exe = std::env::current_exe().unwrap();
-    let run = |gate: &str, port: Option<&str>, webview2: &OsStr, expect: &str| {
+    let run = |gate: Option<&str>, port: Option<&str>, webview2: &OsStr, expect: &str| {
         let mut command = Command::new(&exe);
         command
             .arg("probe")
-            .env("SBRS_AUTOMATION", gate)
             .env("SBRS_CDP_TEST_EXPECT", expect)
             .env("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", webview2)
+            .env_remove("SBRS_AUTOMATION")
             .env_remove("SBRS_CDP_PORT")
             .env_remove("SBRS_CDP_TEST_PORT");
+        if let Some(gate) = gate {
+            command.env("SBRS_AUTOMATION", gate);
+        }
         if let Some(port) = port {
             command
                 .env("SBRS_CDP_PORT", port)
@@ -41,18 +44,34 @@ fn main() {
             String::from_utf8_lossy(&output.stderr)
         );
     };
+    let fr = OsStr::new("--lang=fr-FR");
     for port in ["9333", "invalid", "0"] {
-        run("1", Some(port), OsStr::new("--lang=fr-FR"), "on");
+        run(Some("1"), Some(port), fr, "on");
     }
-    run("0", Some("9333"), OsStr::new("--lang=fr-FR"), "off");
+    run(Some("true"), Some("9333"), fr, "on");
+    // Without the variable the build profile decides, as in the plugin.
+    run(
+        None,
+        Some("9333"),
+        fr,
+        if cfg!(debug_assertions) {
+            "on"
+        } else {
+            "gated"
+        },
+    );
+    // Automation off: no switch is produced, not even by `chromium_args`.
+    // Only 1, true and on turn it on; a typo or an empty value does not.
+    for gate in ["0", "off", "ture", "yes", ""] {
+        run(Some(gate), Some("9333"), fr, "gated");
+    }
     // Text that is not UTF-8 is not a reason to skip the check.
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
         let existing = OsStr::from_bytes(b"--remote-debugging-port=1234 \xff");
-        run("1", None, existing, "off");
+        run(Some("1"), None, existing, "refused");
     }
-
     // An environment that already carries a reserved switch, in any spelling,
     // is refused: the plugin cannot say which endpoint would be the app's.
     for existing in [
@@ -64,19 +83,26 @@ fn main() {
         "--remote-debugging-\"port\"=1234",
         "--edge-webview-switches=--remote-debugging-port=1",
     ] {
-        run("1", None, OsStr::new(existing), "off");
+        run(Some("1"), None, OsStr::new(existing), "refused");
     }
 }
 
 fn probe() {
     let config = CdpStealthConfig::default();
     let initial = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
+    // The launch settings answer to the automation gate, `apply_env` or not.
+    let direct = config.chromium_args();
     // SAFETY: this harness-free child has started no threads or runtime;
     // nothing else can be accessing the process environment.
     let args = unsafe { config.apply_env() };
     let driver = Driver::new(Null, "env-test");
     let reply = driver.handle("GET", "/env-test/cdp", None, b"");
-    if std::env::var("SBRS_CDP_TEST_EXPECT").as_deref() == Ok("off") {
+    let expect = std::env::var("SBRS_CDP_TEST_EXPECT").unwrap();
+    if expect != "on" {
+        // `gated`: automation is off, so no switch is produced at all.
+        // `refused`: the environment already holds a reserved switch, so
+        // `apply_env` leaves it alone, though the arguments could be built.
+        assert_eq!(direct.is_empty(), expect == "gated", "{direct:?}");
         assert!(args.is_empty(), "{args:?}");
         assert_eq!(
             std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default(),
@@ -93,7 +119,10 @@ fn probe() {
     } else {
         9222
     };
-    assert!(args.contains(&format!("--remote-debugging-port={expected}")));
+    for args in [&direct, &args] {
+        assert!(args.contains(&format!("--remote-debugging-port={expected}")));
+        assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_owned()));
+    }
     let appended = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap();
     assert!(appended.starts_with(&initial));
     assert!(appended.contains("--remote-debugging-address=127.0.0.1"));

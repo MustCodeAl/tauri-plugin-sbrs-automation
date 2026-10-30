@@ -36,6 +36,12 @@ fn cdp_discovery_uses_the_existing_authentication_guards() {
 #[cfg(feature = "cdp")]
 #[test]
 fn chromium_configuration_is_available_to_an_app() {
+    // The plugin's gate decides (see `tests/cdp_env.rs`, which sets it in a
+    // child process): skip when the environment of this run changes it.
+    if std::env::var_os("SBRS_AUTOMATION").is_some() || !cfg!(debug_assertions) {
+        return;
+    }
+
     let args = tauri_plugin_sbrs_automation::cdp::CdpStealthConfig::default()
         .debugging_port(9333)
         .stealth_args(true)
