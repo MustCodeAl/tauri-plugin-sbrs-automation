@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::process::Command;
 use std::time::Duration;
-use tauri_plugin_sbrs_automation::cdp::CdpStealthConfig;
+use tauri_plugin_sbrs_automation::cdp::{CdpStealthConfig, enabled_port};
 use tauri_plugin_sbrs_automation::webdriver::{Bridge, Driver, WebDriverError};
 
 struct Null;
@@ -49,6 +49,11 @@ fn main() {
         run(Some("1"), Some(port), fr, "on");
     }
     run(Some("true"), Some("9333"), fr, "on");
+    // A port in the environment is a request for the launch settings, not an
+    // endpoint: an app that did not set Chromium up through the plugin, but
+    // inherited the variable from its parent, advertises nothing.
+    run(Some("1"), Some("9333"), fr, "inherited");
+
     // Without the variable the build profile decides, as in the plugin.
     run(
         None,
@@ -88,22 +93,44 @@ fn main() {
 }
 
 fn probe() {
-    let config = CdpStealthConfig::default();
-    let initial = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
-    // The launch settings answer to the automation gate, `apply_env` or not.
-    let direct = config.chromium_args();
-    // SAFETY: this harness-free child has started no threads or runtime;
-    // nothing else can be accessing the process environment.
-    let args = unsafe { config.apply_env() };
-    let driver = Driver::new(Null, "env-test");
-    let reply = driver.handle("GET", "/env-test/cdp", None, b"");
     let expect = std::env::var("SBRS_CDP_TEST_EXPECT").unwrap();
+    let exported = std::env::var("SBRS_CDP_PORT").ok();
+    let initial = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
+    let config = CdpStealthConfig::default();
+    let args = if expect == "inherited" {
+        // An app that never set up Chromium through the plugin.
+        Vec::new()
+    } else {
+        // SAFETY: this harness-free child has started no threads or runtime;
+        // nothing else can be accessing the process environment.
+        unsafe { config.apply_env() }
+    };
+    // What the plugin does when it starts: read the port once from the launch
+    // settings, never from the environment.
+    let port = enabled_port();
+    let driver = Driver::new(Null, "env-test");
+    let driver = match port {
+        Some(port) => driver.with_cdp_port(port),
+        None => driver,
+    };
+    let reply = driver.handle("GET", "/env-test/cdp", None, b"");
+    // Nothing leaves the debugger's port in the environment for child
+    // processes to inherit: the variable is what the parent set, or unset.
+    assert_eq!(std::env::var("SBRS_CDP_PORT").ok(), exported);
+    // The launch settings answer to the automation gate, `apply_env` or not.
+    let direct = if expect == "inherited" {
+        Vec::new()
+    } else {
+        config.chromium_args()
+    };
     if expect != "on" {
         // `gated`: automation is off, so no switch is produced at all.
         // `refused`: the environment already holds a reserved switch, so
         // `apply_env` leaves it alone, though the arguments could be built.
-        assert_eq!(direct.is_empty(), expect == "gated", "{direct:?}");
+        // `inherited`: SBRS_CDP_PORT is set, but nothing here enabled a port.
+        assert_eq!(direct.is_empty(), expect != "refused", "{direct:?}");
         assert!(args.is_empty(), "{args:?}");
+        assert_eq!(port, None);
         assert_eq!(
             std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default(),
             initial
@@ -123,6 +150,7 @@ fn probe() {
         assert!(args.contains(&format!("--remote-debugging-port={expected}")));
         assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_owned()));
     }
+    assert_eq!(port, Some(expected));
     let appended = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap();
     assert!(appended.starts_with(&initial));
     assert!(appended.contains("--remote-debugging-address=127.0.0.1"));

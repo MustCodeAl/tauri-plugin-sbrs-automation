@@ -3,15 +3,33 @@
 //! This does not add Chromium to a system WebKit runtime. Pass the returned
 //! arguments to your CEF initialization, or use WebView2 on Windows.
 
-/// The configured port, only when automation and CDP were explicitly enabled.
-pub(crate) fn active_port() -> Option<u16> {
-    if !crate::Settings::automation_enabled() {
-        return None;
+use std::sync::atomic::{AtomicU16, Ordering};
+
+/// The debugging port the launch settings turned on in this process (0: none).
+/// Only [`CdpStealthConfig::chromium_args`] and [`CdpStealthConfig::apply_env`]
+/// write it, and only with automation on, so the environment of a parent
+/// process can never put a port here.
+static ENABLED_PORT: AtomicU16 = AtomicU16::new(0);
+
+/// What `GET /<token>/cdp` answers for the debugging port the plugin was told
+/// of (`None`: CDP is off).
+pub(crate) fn discovery(port: Option<u16>) -> serde_json::Value {
+    serde_json::json!({
+        "cdpEnabled": port.is_some(),
+        "cdpPort": port,
+        "cdpUrl": port.map(|port| format!("http://127.0.0.1:{port}")),
+    })
+}
+
+/// The debugging port that the launch settings (`CdpStealthConfig`, feature
+/// `cdp`) turned on in this process, if any. The plugin reads it once, when it
+/// starts, and reports it on `GET /<token>/cdp`.
+#[must_use]
+pub fn enabled_port() -> Option<u16> {
+    match ENABLED_PORT.load(Ordering::Relaxed) {
+        0 => None,
+        port => Some(port),
     }
-    std::env::var("SBRS_CDP_PORT")
-        .ok()
-        .and_then(|port| port.parse().ok())
-        .filter(|port| *port != 0)
 }
 
 /// Chromium launch settings for CEF or WebView2 (feature `cdp`).
@@ -92,19 +110,36 @@ impl CdpStealthConfig {
     /// override the local endpoint.
     #[must_use]
     pub fn chromium_args(&self) -> Vec<String> {
-        self.args_with(crate::Settings::automation_enabled())
+        let port = self.port_with(crate::Settings::automation_enabled());
+        if let Some(port) = port {
+            // The plugin reads this once, when it starts, and reports it on
+            // `GET /<token>/cdp`; nothing else tells it of a debugging port.
+            ENABLED_PORT.store(port, Ordering::Relaxed);
+        }
+        self.args_for(port)
     }
 
-    /// [`chromium_args`](Self::chromium_args) for a given state of the
-    /// automation gate: nothing at all when it is off.
-    fn args_with(&self, automation: bool) -> Vec<String> {
-        if !automation {
-            return Vec::new();
-        }
+    /// The port the debugger listens on, when the automation gate is on.
+    fn port_with(&self, automation: bool) -> Option<u16> {
         let port = if self.debugging_port == 0 {
             9222
         } else {
             self.debugging_port
+        };
+        automation.then_some(port)
+    }
+
+    /// [`chromium_args`](Self::chromium_args) for a given state of the
+    /// automation gate: nothing at all when it is off. It records no port.
+    #[cfg(test)]
+    fn args_with(&self, automation: bool) -> Vec<String> {
+        self.args_for(self.port_with(automation))
+    }
+
+    /// The switches for `port`; nothing when there is none.
+    fn args_for(&self, port: Option<u16>) -> Vec<String> {
+        let Some(port) = port else {
+            return Vec::new();
         };
         let mut args = vec![
             format!("--remote-debugging-port={port}"),
@@ -122,7 +157,12 @@ impl CdpStealthConfig {
         args
     }
 
-    /// Appends WebView2 flags and advertises `SBRS_CDP_PORT`; returns CEF arguments.
+    /// Appends the arguments to `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (the
+    /// WebView2 way) and returns them (the CEF way), and records the debugging
+    /// port for the plugin to report. The port is not exported: nothing but
+    /// this variable is set, and WebView2 reads it as it creates its
+    /// environment, so child processes that inherit it inherit the debugging
+    /// switches too (remove it for a child that must not).
     /// Does nothing when the plugin's automation gate is off.
     ///
     /// # Safety
@@ -156,17 +196,12 @@ impl CdpStealthConfig {
         } else {
             format!("{existing} {additional}")
         };
-        let port = if self.debugging_port == 0 {
-            9222
-        } else {
-            self.debugging_port
-        };
+
         // SAFETY: the caller guarantees exclusive access to the process
-        // environment before any threads or runtime are started. Values have
-        // no NUL bytes and the keys are fixed, valid environment names.
+        // environment before any threads or runtime are started. The value has
+        // no NUL bytes and the key is a fixed, valid environment name.
         unsafe {
             std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", combined);
-            std::env::set_var("SBRS_CDP_PORT", port.to_string());
         }
         args
     }

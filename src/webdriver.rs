@@ -168,6 +168,11 @@ pub struct Response {
 pub struct Driver<B> {
     bridge: B,
     token: String,
+    /// The debugging port of the app's own Chromium, when the app's launch
+    /// settings turned one on in this process. Read once, when the plugin
+    /// starts; `GET /<token>/cdp` reports it and nothing else.
+    cdp_port: Option<u16>,
+
     session: Mutex<Option<String>>,
     sessions: AtomicU64,
     timeouts: Mutex<Timeouts>,
@@ -179,10 +184,21 @@ impl<B: Bridge> Driver<B> {
         Self {
             bridge,
             token: token.into(),
+            cdp_port: None,
             session: Mutex::new(None),
             sessions: AtomicU64::new(0),
             timeouts: Mutex::new(Timeouts::default()),
         }
+    }
+
+    /// Reports `port` on `GET /<token>/cdp` as the debugging port of the app's
+    /// own Chromium. The plugin passes the port its start-up read from the
+    /// launch settings ([`crate::cdp::enabled_port`]); without this call the
+    /// route says CDP is off, whatever the environment holds.
+    #[must_use]
+    pub fn with_cdp_port(mut self, port: u16) -> Self {
+        self.cdp_port = Some(port);
+        self
     }
 
     /// Answers one request. `origin` is the request's `Origin` header: browsers
@@ -232,14 +248,7 @@ impl<B: Bridge> Driver<B> {
             ("GET", ["status"]) => {
                 Ok(json!({ "ready": true, "message": "tauri-plugin-sbrs-automation is ready" }))
             }
-            ("GET", ["cdp"]) => {
-                let port = crate::cdp::active_port();
-                Ok(json!({
-                    "cdpEnabled": port.is_some(),
-                    "cdpPort": port,
-                    "cdpUrl": port.map(|port| format!("http://127.0.0.1:{port}")),
-                }))
-            }
+            ("GET", ["cdp"]) => Ok(crate::cdp::discovery(self.cdp_port)),
             ("POST", ["session"]) => self.new_session(),
             ("DELETE", ["session", id]) => {
                 self.check_session(id)?;
