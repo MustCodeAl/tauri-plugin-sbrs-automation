@@ -4,6 +4,7 @@
 //! arguments to your CEF initialization, or use WebView2 on Windows.
 
 use std::sync::atomic::{AtomicU16, Ordering};
+use std::time::Duration;
 
 /// The debugging port the launch settings turned on in this process (0: none).
 /// Only [`CdpStealthConfig::chromium_args`] and [`CdpStealthConfig::apply_env`]
@@ -14,11 +15,109 @@ static ENABLED_PORT: AtomicU16 = AtomicU16::new(0);
 /// What `GET /<token>/cdp` answers for the debugging port the plugin was told
 /// of (`None`: CDP is off).
 pub(crate) fn discovery(port: Option<u16>) -> serde_json::Value {
+    discovery_with(port, PROBE_TIMEOUT)
+}
+
+/// How long the discovery route waits for the debugger to answer.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// [`discovery`] with a given wait for the debugger.
+fn discovery_with(port: Option<u16>, timeout: Duration) -> serde_json::Value {
+    let (state, port) = match port {
+        None => ("disabled", None),
+        Some(port) if devtools_answers(port, timeout) => ("ready", Some(port)),
+        Some(_) => ("unreachable", None),
+    };
     serde_json::json!({
         "cdpEnabled": port.is_some(),
         "cdpPort": port,
         "cdpUrl": port.map(|port| format!("http://127.0.0.1:{port}")),
+        "cdpState": state,
     })
+}
+
+/// How much of an answer the probe reads: `/json/version` is a few hundred
+/// bytes, and what listens there may not be Chromium.
+const PROBE_LIMIT: usize = 16 * 1024;
+
+/// Whether a Chromium DevTools endpoint answers `GET /json/version` on
+/// `127.0.0.1:port` within `timeout`: a `200` whose JSON names a `Browser` and
+/// a `webSocketDebuggerUrl` on that same port. It does not prove that the
+/// browser is the app's own, only that what answers on the port the launch
+/// settings chose is a Chromium debugger and not some other listener. A second
+/// browser that took the port in the instant between the check for a free port
+/// and the start of Chromium would pass; a port chosen free makes that unlikely.
+fn devtools_answers(port: u16, timeout: Duration) -> bool {
+    use std::io::{Read, Write};
+    use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+    use std::time::Instant;
+
+    let deadline = Instant::now() + timeout;
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
+        return false;
+    };
+    let request = format!(
+        "GET /json/version HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    if stream.set_write_timeout(Some(timeout)).is_err()
+        || stream.write_all(request.as_bytes()).is_err()
+    {
+        return false;
+    }
+    let mut reply = Vec::new();
+    let mut chunk = [0u8; 2048];
+    while reply.len() < PROBE_LIMIT && !answer_is_complete(&reply) {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            return false;
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => reply.extend_from_slice(&chunk[..read]),
+            Err(_) => return false,
+        }
+    }
+    is_devtools_version(&reply, port)
+}
+
+/// Where the head of an HTTP answer ends and its body begins.
+fn body_start(reply: &[u8]) -> Option<usize> {
+    reply
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|end| end + 4)
+}
+
+/// Whether the head says how long the body is and the body is all there:
+/// then there is no need to wait for the connection to close.
+fn answer_is_complete(reply: &[u8]) -> bool {
+    let Some(start) = body_start(reply) else {
+        return false;
+    };
+    let head = String::from_utf8_lossy(&reply[..start]);
+    head.lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, length)| length.trim().parse::<usize>().ok())
+        .is_some_and(|length| reply.len() >= start + length)
+}
+
+/// Whether `reply` is the `200` answer of a Chromium DevTools endpoint that
+/// listens on `port`.
+fn is_devtools_version(reply: &[u8], port: u16) -> bool {
+    let Some(start) = body_start(reply) else {
+        return false;
+    };
+    let succeeded = reply.starts_with(b"HTTP/1.1 200") || reply.starts_with(b"HTTP/1.0 200");
+    let Ok(version) = serde_json::from_slice::<serde_json::Value>(&reply[start..]) else {
+        return false;
+    };
+    succeeded
+        && version["Browser"].is_string()
+        && version["webSocketDebuggerUrl"]
+            .as_str()
+            .is_some_and(|url| url.starts_with(&format!("ws://127.0.0.1:{port}/devtools/")))
 }
 
 /// The debugging port that the launch settings (`CdpStealthConfig`, feature
@@ -47,8 +146,12 @@ pub fn enabled_port() -> Option<u16> {
 #[cfg(feature = "cdp")]
 #[derive(Debug, Clone)]
 pub struct CdpStealthConfig {
-    /// `SBRS_CDP_PORT`, or 9222. Port zero uses 9222 rather than an undiscoverable port.
-    pub debugging_port: u16,
+    /// The port to listen on: `SBRS_CDP_PORT` when it holds a valid non-zero
+    /// port, else `None`, which picks a free loopback port (the same one for
+    /// the life of the process). A port that is already in use enables
+    /// nothing, so a client cannot end up at another browser; the discovery
+    /// route reports the port that was chosen.
+    pub debugging_port: Option<u16>,
     /// Include the few engine stealth arguments (default false: opt in). They
     /// hide `navigator.webdriver` and stop background throttling; none of them
     /// turns off a protection of the app's browser. Site isolation, the popup
@@ -68,8 +171,7 @@ impl Default for CdpStealthConfig {
             debugging_port: std::env::var("SBRS_CDP_PORT")
                 .ok()
                 .and_then(|port| port.parse().ok())
-                .filter(|port| *port != 0)
-                .unwrap_or(9222),
+                .filter(|port| *port != 0),
             stealth_args: false,
             extra_args: Vec::new(),
         }
@@ -78,10 +180,11 @@ impl Default for CdpStealthConfig {
 
 #[cfg(feature = "cdp")]
 impl CdpStealthConfig {
-    /// Selects the fixed local debugging port.
+    /// Selects a fixed local debugging port; zero asks for a free one, as
+    /// `None` does. The port must be free when the arguments are built.
     #[must_use]
     pub fn debugging_port(mut self, port: u16) -> Self {
-        self.debugging_port = port;
+        self.debugging_port = Some(port).filter(|port| *port != 0);
         self
     }
 
@@ -110,7 +213,7 @@ impl CdpStealthConfig {
     /// override the local endpoint.
     #[must_use]
     pub fn chromium_args(&self) -> Vec<String> {
-        let port = self.port_with(crate::Settings::automation_enabled());
+        let port = self.resolve(crate::Settings::automation_enabled());
         if let Some(port) = port {
             // The plugin reads this once, when it starts, and reports it on
             // `GET /<token>/cdp`; nothing else tells it of a debugging port.
@@ -120,20 +223,37 @@ impl CdpStealthConfig {
     }
 
     /// The port the debugger listens on, when the automation gate is on.
-    fn port_with(&self, automation: bool) -> Option<u16> {
-        let port = if self.debugging_port == 0 {
-            9222
-        } else {
-            self.debugging_port
-        };
-        automation.then_some(port)
+    fn resolve(&self, automation: bool) -> Option<u16> {
+        if !automation {
+            return None;
+        }
+        match self.debugging_port {
+            None => {
+                let port = automatic_port();
+                if port.is_none() {
+                    eprintln!(
+                        "tauri-plugin-sbrs-automation: no CDP endpoint, no free loopback port was found"
+                    );
+                }
+                port
+            }
+            // A port that an earlier call recorded is this process's own: it
+            // is held by the Chromium these arguments started, not by another.
+            Some(port) if enabled_port() == Some(port) || port_is_free(port) => Some(port),
+            Some(port) => {
+                eprintln!(
+                    "tauri-plugin-sbrs-automation: no CDP endpoint, port {port} is already in use (leave SBRS_CDP_PORT unset to pick a free port)"
+                );
+                None
+            }
+        }
     }
 
     /// [`chromium_args`](Self::chromium_args) for a given state of the
     /// automation gate: nothing at all when it is off. It records no port.
     #[cfg(test)]
     fn args_with(&self, automation: bool) -> Vec<String> {
-        self.args_for(self.port_with(automation))
+        self.args_for(self.resolve(automation))
     }
 
     /// The switches for `port`; nothing when there is none.
@@ -186,6 +306,12 @@ impl CdpStealthConfig {
             return Vec::new();
         }
         let args = self.chromium_args();
+        // No arguments (the port asked for is in use): leave the environment as it is.
+        if args.is_empty() {
+            return Vec::new();
+        }
+        // No arguments (the port asked for is in use): leave the environment as it is.
+
         let additional = args
             .iter()
             .map(|arg| webview2_argument(arg))
@@ -232,6 +358,30 @@ const STEALTH_ARGS: [&str; 5] = [
     // No "resubmit the form?" dialog that a script cannot answer; UI only.
     "--disable-prompt-on-repost",
 ];
+
+/// A loopback port that nothing listens on at this moment.
+#[cfg(feature = "cdp")]
+fn free_loopback_port() -> Option<u16> {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).ok()?;
+    listener.local_addr().ok().map(|address| address.port())
+}
+
+/// Whether nothing listens on `127.0.0.1:port` at this moment.
+#[cfg(feature = "cdp")]
+fn port_is_free(port: u16) -> bool {
+    std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_ok()
+}
+
+/// The port this process uses when none was asked for: a free one, found the
+/// first time and the same afterwards, so that every call that builds the
+/// arguments agrees. There is a moment between finding it and Chromium
+/// binding it in which another process could take it; the discovery route
+/// does not advertise a port where no Chromium debugger answers.
+#[cfg(feature = "cdp")]
+fn automatic_port() -> Option<u16> {
+    static PORT: std::sync::OnceLock<Option<u16>> = std::sync::OnceLock::new();
+    *PORT.get_or_init(free_loopback_port)
+}
 
 /// Whether `text` names a switch this module reserves (in any spelling), or
 /// holds a NUL byte, which no command line can carry.
@@ -281,21 +431,189 @@ fn webview2_argument(arg: &str) -> String {
     result
 }
 
+/// A fake DevTools endpoint for the tests below, shared with `tests/`.
+#[cfg(test)]
+#[path = "../tests/support/devtools.rs"]
+mod devtools;
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::{devtools, discovery_with};
+    use serde_json::{Value, json};
+    use std::time::{Duration, Instant};
+
+    const WAIT: Duration = Duration::from_secs(2);
+
+    fn answer(state: &str, port: Option<u16>) -> Value {
+        json!({
+            "cdpEnabled": port.is_some(),
+            "cdpPort": port,
+            "cdpUrl": port.map(|port| format!("http://127.0.0.1:{port}")),
+            "cdpState": state,
+        })
+    }
+
+    #[test]
+    fn without_a_port_the_answer_is_disabled() {
+        assert_eq!(discovery_with(None, WAIT), answer("disabled", None));
+    }
+
+    #[test]
+    fn a_port_where_devtools_answers_is_advertised() {
+        let port = devtools::serve_devtools();
+        assert_eq!(
+            discovery_with(Some(port), WAIT),
+            answer("ready", Some(port))
+        );
+    }
+
+    #[test]
+    fn a_port_where_nothing_listens_is_not_advertised() {
+        let port = devtools::free_port();
+        assert_eq!(
+            discovery_with(Some(port), WAIT),
+            answer("unreachable", None)
+        );
+    }
+
+    #[test]
+    fn a_listener_that_is_not_devtools_is_not_advertised() {
+        let others = [
+            // Another HTTP server.
+            devtools::serve_raw(|_| devtools::http("HTTP/1.1 200 OK", r#"{"hello":"world"}"#)),
+            // Chromium's answer, but not a success.
+            devtools::serve_raw(|port| {
+                devtools::http("HTTP/1.1 404 Not Found", &devtools::version_body(port))
+            }),
+            // Text that is not JSON.
+            devtools::serve_raw(|_| devtools::http("HTTP/1.1 200 OK", "<html></html>")),
+            // Not HTTP at all.
+            devtools::serve_raw(|_| "SSH-2.0-OpenSSH_9.0\r\n".to_owned()),
+            // A DevTools answer that names another port: a proxy, or a second
+            // browser behind this one.
+            devtools::serve_raw(|port| {
+                devtools::http(
+                    "HTTP/1.1 200 OK",
+                    &devtools::version_body(port).replace(
+                        &format!("127.0.0.1:{port}"),
+                        &format!("127.0.0.1:{}", port.wrapping_add(1)),
+                    ),
+                )
+            }),
+        ];
+        for port in others {
+            assert_eq!(
+                discovery_with(Some(port), WAIT),
+                answer("unreachable", None),
+                "port {port}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_listener_that_never_answers_is_given_up_on() {
+        let port = devtools::serve_silence();
+        let started = Instant::now();
+        assert_eq!(
+            discovery_with(Some(port), Duration::from_millis(300)),
+            answer("unreachable", None)
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn an_answer_with_its_length_needs_no_closed_connection() {
+        let port = devtools::serve_devtools_keeping_the_connection();
+        let started = Instant::now();
+        assert_eq!(
+            discovery_with(Some(port), Duration::from_secs(10)),
+            answer("ready", Some(port))
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+}
+
 #[cfg(all(test, feature = "cdp"))]
 mod tests {
+    use super::devtools;
     use super::*;
+    use std::net::{Ipv4Addr, TcpListener};
+
+    /// A config that asks for no port, whatever `SBRS_CDP_PORT` holds.
+    fn unset() -> CdpStealthConfig {
+        CdpStealthConfig {
+            debugging_port: None,
+            ..CdpStealthConfig::default()
+        }
+    }
+
+    #[test]
+    fn an_unset_port_is_a_free_loopback_port_that_stays_the_same() {
+        let port = unset().resolve(true).unwrap();
+        assert_ne!(port, 0);
+        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok());
+        // Another config, another call: the same port for the whole process.
+        assert_eq!(unset().resolve(true), Some(port));
+        assert_eq!(unset().resolve(false), None);
+        assert!(
+            unset()
+                .args_with(true)
+                .contains(&format!("--remote-debugging-port={port}"))
+        );
+    }
+
+    #[test]
+    fn a_free_port_that_was_asked_for_is_kept() {
+        let port = devtools::free_port();
+        assert_eq!(
+            CdpStealthConfig::default()
+                .debugging_port(port)
+                .resolve(true),
+            Some(port)
+        );
+    }
+
+    #[test]
+    fn a_port_that_is_taken_enables_nothing() {
+        // Another browser (or another instance of the app) already listens
+        // there: Chromium would fail to bind, and a client that followed the
+        // port would attach to that other browser.
+        let taken = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = taken.local_addr().unwrap().port();
+        let config = CdpStealthConfig::default()
+            .debugging_port(port)
+            .stealth_args(true);
+        assert_eq!(config.resolve(true), None);
+        assert!(config.args_with(true).is_empty());
+    }
+
+    #[test]
+    fn port_zero_asks_for_a_free_port_like_none() {
+        assert_eq!(
+            CdpStealthConfig::default().debugging_port(0).debugging_port,
+            None
+        );
+        assert_eq!(
+            CdpStealthConfig::default()
+                .debugging_port(9333)
+                .debugging_port,
+            Some(9333)
+        );
+    }
 
     #[test]
     fn nothing_is_produced_when_automation_is_off() {
         // A release build must not open a debugging port, whatever the app
         // asked for: not the port, not the stealth flags, not the extras.
+        let port = devtools::free_port();
         let config = CdpStealthConfig::default()
-            .debugging_port(9333)
+            .debugging_port(port)
             .stealth_args(true)
             .arg("--lang=en-US");
         assert!(config.args_with(false).is_empty());
+        assert_eq!(config.resolve(false), None);
         let on = config.args_with(true);
-        assert!(on.contains(&"--remote-debugging-port=9333".to_owned()));
+        assert!(on.contains(&format!("--remote-debugging-port={port}")));
         assert!(on.contains(&"--remote-debugging-address=127.0.0.1".to_owned()));
     }
 
@@ -353,16 +671,17 @@ mod tests {
 
     #[test]
     fn opt_in_stealth_adds_exactly_the_vetted_arguments() {
+        let port = devtools::free_port();
         let config = CdpStealthConfig::default()
-            .debugging_port(9333)
+            .debugging_port(port)
             .stealth_args(true)
             .arg("--lang=en-US");
         let args = config.args_with(true);
         assert_eq!(
             &args[..2],
             [
-                "--remote-debugging-port=9333",
-                "--remote-debugging-address=127.0.0.1"
+                format!("--remote-debugging-port={port}"),
+                "--remote-debugging-address=127.0.0.1".to_owned()
             ]
         );
         assert_eq!(&args[2..args.len() - 1], STEALTH_ARGS);
@@ -371,15 +690,16 @@ mod tests {
 
     #[test]
     fn stealth_can_be_disabled_without_disabling_loopback_debugging() {
+        let port = devtools::free_port();
         let args = CdpStealthConfig::default()
-            .debugging_port(9222)
+            .debugging_port(port)
             .stealth_args(false)
             .args_with(true);
         assert_eq!(
             args,
             [
-                "--remote-debugging-port=9222",
-                "--remote-debugging-address=127.0.0.1"
+                format!("--remote-debugging-port={port}"),
+                "--remote-debugging-address=127.0.0.1".to_owned()
             ]
         );
     }

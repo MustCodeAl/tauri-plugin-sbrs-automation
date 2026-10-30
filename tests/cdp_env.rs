@@ -2,10 +2,14 @@
 
 use serde_json::{Value, json};
 use std::ffi::OsStr;
+use std::net::{Ipv4Addr, TcpListener};
 use std::process::Command;
 use std::time::Duration;
 use tauri_plugin_sbrs_automation::cdp::{CdpStealthConfig, enabled_port};
 use tauri_plugin_sbrs_automation::webdriver::{Bridge, Driver, WebDriverError};
+
+#[path = "support/devtools.rs"]
+mod devtools;
 
 struct Null;
 impl Bridge for Null {
@@ -45,22 +49,31 @@ fn main() {
         );
     };
     let fr = OsStr::new("--lang=fr-FR");
-    for port in ["9333", "invalid", "0"] {
-        run(Some("1"), Some(port), fr, "on");
+    let free = || devtools::free_port().to_string();
+    // A port that is asked for, and free, is used.
+    run(Some("1"), Some(&free()), fr, "on");
+    run(Some("true"), Some(&free()), fr, "on");
+    // No usable port asked for: a free one is picked.
+    for port in ["invalid", "0"] {
+        run(Some("1"), Some(port), fr, "auto");
     }
-    run(Some("true"), Some("9333"), fr, "on");
+    run(Some("1"), None, fr, "auto");
+    // A port that is taken enables nothing.
+    let taken = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let taken_port = taken.local_addr().unwrap().port().to_string();
+    run(Some("1"), Some(&taken_port), fr, "taken");
+    drop(taken);
     // A port in the environment is a request for the launch settings, not an
     // endpoint: an app that did not set Chromium up through the plugin, but
     // inherited the variable from its parent, advertises nothing.
     run(Some("1"), Some("9333"), fr, "inherited");
-
     // Without the variable the build profile decides, as in the plugin.
     run(
         None,
-        Some("9333"),
+        None,
         fr,
         if cfg!(debug_assertions) {
-            "on"
+            "auto"
         } else {
             "gated"
         },
@@ -68,7 +81,7 @@ fn main() {
     // Automation off: no switch is produced, not even by `chromium_args`.
     // Only 1, true and on turn it on; a typo or an empty value does not.
     for gate in ["0", "off", "ture", "yes", ""] {
-        run(Some(gate), Some("9333"), fr, "gated");
+        run(Some(gate), Some(&free()), fr, "gated");
     }
     // Text that is not UTF-8 is not a reason to skip the check.
     #[cfg(unix)]
@@ -113,7 +126,7 @@ fn probe() {
         Some(port) => driver.with_cdp_port(port),
         None => driver,
     };
-    let reply = driver.handle("GET", "/env-test/cdp", None, b"");
+    let ask = || driver.handle("GET", "/env-test/cdp", None, b"").body;
     // Nothing leaves the debugger's port in the environment for child
     // processes to inherit: the variable is what the parent set, or unset.
     assert_eq!(std::env::var("SBRS_CDP_PORT").ok(), exported);
@@ -123,8 +136,9 @@ fn probe() {
     } else {
         config.chromium_args()
     };
-    if expect != "on" {
+    if !matches!(expect.as_str(), "on" | "auto") {
         // `gated`: automation is off, so no switch is produced at all.
+        // `taken`: the port asked for is in use, so nothing is enabled.
         // `refused`: the environment already holds a reserved switch, so
         // `apply_env` leaves it alone, though the arguments could be built.
         // `inherited`: SBRS_CDP_PORT is set, but nothing here enabled a port.
@@ -136,28 +150,49 @@ fn probe() {
             initial
         );
         assert_eq!(
-            reply.body,
-            json!({ "value": { "cdpEnabled": false, "cdpPort": null, "cdpUrl": null } })
+            ask(),
+            json!({ "value": {
+                "cdpEnabled": false, "cdpPort": null, "cdpUrl": null, "cdpState": "disabled"
+            } })
         );
         return;
     }
-    let expected = if std::env::var("SBRS_CDP_TEST_PORT").as_deref() == Ok("9333") {
-        9333
-    } else {
-        9222
-    };
+    // The port is the one asked for, or else a free one the plugin picked.
+    let chosen = args
+        .iter()
+        .find_map(|arg| arg.strip_prefix("--remote-debugging-port="))
+        .and_then(|port| port.parse::<u16>().ok())
+        .unwrap();
+    assert_ne!(chosen, 0);
+    if expect == "on" {
+        let asked: u16 = std::env::var("SBRS_CDP_TEST_PORT")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(chosen, asked);
+    }
     for args in [&direct, &args] {
-        assert!(args.contains(&format!("--remote-debugging-port={expected}")));
+        assert!(args.contains(&format!("--remote-debugging-port={chosen}")));
         assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_owned()));
     }
-    assert_eq!(port, Some(expected));
+    assert_eq!(port, Some(chosen));
     let appended = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap();
     assert!(appended.starts_with(&initial));
     assert!(appended.contains("--remote-debugging-address=127.0.0.1"));
+    // Chromium has not started yet: nothing is advertised.
     assert_eq!(
-        reply.body,
+        ask(),
         json!({ "value": {
-            "cdpEnabled": true, "cdpPort": expected, "cdpUrl": format!("http://127.0.0.1:{expected}")
+            "cdpEnabled": false, "cdpPort": null, "cdpUrl": null, "cdpState": "unreachable"
+        } })
+    );
+    // Once a DevTools endpoint answers on that port, it is.
+    devtools::serve_devtools_on(chosen);
+    assert_eq!(
+        ask(),
+        json!({ "value": {
+            "cdpEnabled": true, "cdpPort": chosen,
+            "cdpUrl": format!("http://127.0.0.1:{chosen}"), "cdpState": "ready"
         } })
     );
 }
