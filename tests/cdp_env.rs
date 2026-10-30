@@ -136,6 +136,13 @@ fn probe() {
     } else {
         config.chromium_args()
     };
+    // The port alone, for an app that configures CEF's remote debugging itself.
+    let own = if expect == "inherited" {
+        None
+    } else {
+        config.port()
+    };
+
     if !matches!(expect.as_str(), "on" | "auto") {
         // `gated`: automation is off, so no switch is produced at all.
         // `taken`: the port asked for is in use, so nothing is enabled.
@@ -145,6 +152,8 @@ fn probe() {
         assert_eq!(direct.is_empty(), expect != "refused", "{direct:?}");
         assert!(args.is_empty(), "{args:?}");
         assert_eq!(port, None);
+        assert_eq!(own.is_some(), expect == "refused", "{own:?}");
+
         assert_eq!(
             std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default(),
             initial
@@ -176,6 +185,8 @@ fn probe() {
         assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_owned()));
     }
     assert_eq!(port, Some(chosen));
+    assert_eq!(own, Some(chosen));
+
     let appended = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap();
     assert!(appended.starts_with(&initial));
     assert!(appended.contains("--remote-debugging-address=127.0.0.1"));

@@ -1,7 +1,41 @@
-//! Optional Chromium CDP setup (feature `cdp`) and authenticated discovery.
+//! Chromium DevTools (CDP) for an app that ships its own Chromium: CEF, or
+//! WebView2 on Windows. The launch settings, `CdpStealthConfig`, are the
+//! feature `cdp`; the discovery route `GET /<token>/cdp` is always there.
+//! This does not add Chromium to a system WebKit runtime (macOS, Linux).
 //!
-//! This does not add Chromium to a system WebKit runtime. Pass the returned
-//! arguments to your CEF initialization, or use WebView2 on Windows.
+//! # The debugging socket has no authentication
+//!
+//! Chromium's DevTools socket accepts every process that can reach it, and on
+//! a shared machine every user: whoever connects can run script in each page
+//! of the app, read what the app stores and drive its windows. Only the
+//! discovery route is protected (the secret token in the URL, loopback only,
+//! no request from a web page); the socket it names is not. So the launch
+//! settings produce the debugging switches only when the plugin's automation
+//! gate is on (a debug build, or `SBRS_AUTOMATION` set to `1`, `true` or
+//! `on`), bind them to `127.0.0.1`, and a release build of an app must not
+//! turn the gate on.
+//!
+//! # Which port
+//!
+//! Without `SBRS_CDP_PORT` the launch settings pick a free loopback port, the
+//! same one for the life of the process. A port that is asked for and in use
+//! enables nothing. The plugin reads the port the launch settings enabled
+//! once, when it starts, and never from the environment of a parent process.
+//! `GET /<token>/cdp` advertises the port only while `GET /json/version`
+//! answers there like Chromium (`cdpState` is `ready`; `unreachable` before
+//! Chromium has started or when something else holds the port). That confirms
+//! a Chromium debugger listens on the port, not that the browser is the app's
+//! own: another browser that took the port in the instant between the choice
+//! and the start of Chromium would pass.
+//!
+//! # Setup
+//!
+//! Pass `CdpStealthConfig::chromium_args` to CEF (its `command_line_arg`
+//! takes the switch name without the leading `--`, and a value), or call
+//! `CdpStealthConfig::apply_env` before Tauri starts, on WebView2.
+//! The Tauri CEF guide documents `Cef::command_line_arg` and
+//! `Cef::remote_debugging`, which is off by default and, as a port, reachable
+//! by every process on the machine.
 
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
@@ -213,13 +247,25 @@ impl CdpStealthConfig {
     /// override the local endpoint.
     #[must_use]
     pub fn chromium_args(&self) -> Vec<String> {
+        self.args_for(self.port())
+    }
+
+    /// The debugging port the launch settings use, for an app that turns on
+    /// remote debugging itself (CEF's `remote_debugging`, say) instead of
+    /// passing [`chromium_args`](Self::chromium_args): the port asked for when
+    /// it is free, else a free one. `None` when the plugin's automation gate
+    /// is off or the port asked for is in use. Like `chromium_args`, it makes
+    /// the plugin report the port on `GET /<token>/cdp`, once a Chromium
+    /// debugger answers there.
+    #[must_use]
+    pub fn port(&self) -> Option<u16> {
         let port = self.resolve(crate::Settings::automation_enabled());
         if let Some(port) = port {
             // The plugin reads this once, when it starts, and reports it on
             // `GET /<token>/cdp`; nothing else tells it of a debugging port.
             ENABLED_PORT.store(port, Ordering::Relaxed);
         }
-        self.args_for(port)
+        port
     }
 
     /// The port the debugger listens on, when the automation gate is on.

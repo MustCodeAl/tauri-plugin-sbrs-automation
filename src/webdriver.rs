@@ -248,6 +248,9 @@ impl<B: Bridge> Driver<B> {
             ("GET", ["status"]) => {
                 Ok(json!({ "ready": true, "message": "tauri-plugin-sbrs-automation is ready" }))
             }
+            // The token guards this route, which only names the port. The
+            // debugging socket on that port has no authentication of its
+            // own (see `crate::cdp`).
             ("GET", ["cdp"]) => Ok(crate::cdp::discovery(self.cdp_port)),
             ("POST", ["session"]) => self.new_session(),
             ("DELETE", ["session", id]) => {
