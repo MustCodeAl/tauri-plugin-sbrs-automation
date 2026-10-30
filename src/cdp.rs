@@ -33,7 +33,10 @@ pub struct CdpStealthConfig {
     /// turns off a protection of the app's browser. Site isolation, the popup
     /// blocker and the encryption of stored data stay on.
     pub stealth_args: bool,
-    /// Additional trusted arguments. Remote-debugging switches are reserved.
+    /// Additional trusted arguments. The switches of the debugging endpoint
+    /// (`--remote-debugging-*`, `--remote-allow-origins`) and WebView2's
+    /// `--edge-webview-switches` are reserved, in any case and with any prefix
+    /// (`--`, `-`, `/`): an argument that mentions one is dropped.
     pub extra_args: Vec<String>,
 }
 
@@ -94,11 +97,7 @@ impl CdpStealthConfig {
         args.extend(
             self.extra_args
                 .iter()
-                .filter(|arg| {
-                    !arg.contains('\0')
-                        && !arg.contains("remote-debugging-")
-                        && !arg.contains("edge-webview-switches")
-                })
+                .filter(|arg| !is_reserved(arg))
                 .cloned(),
         );
         args
@@ -118,8 +117,7 @@ impl CdpStealthConfig {
         let existing = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
         // These switches can bypass or supersede the TCP endpoint. Refuse
         // activation rather than advertising a different endpoint to clients.
-        if existing.contains("remote-debugging-pipe") || existing.contains("edge-webview-switches")
-        {
+        if is_reserved(&existing) {
             return Vec::new();
         }
         let args = self.chromium_args();
@@ -174,6 +172,29 @@ const STEALTH_ARGS: [&str; 5] = [
     // No "resubmit the form?" dialog that a script cannot answer; UI only.
     "--disable-prompt-on-repost",
 ];
+
+/// Whether `text` names a switch this module reserves (in any spelling), or
+/// holds a NUL byte, which no command line can carry.
+#[cfg(feature = "cdp")]
+fn is_reserved(text: &str) -> bool {
+    // Chromium reads switch names without regard to case on Windows, takes
+    // `/` and `-` as well as `--` as the prefix there, and drops quotes when
+    // it splits the command line. So the text is lowered and unquoted, and the
+    // names are searched anywhere in it rather than at its start.
+    const RESERVED: [&str; 3] = [
+        // The debugging port, address, pipe and any other of its switches.
+        "remote-debugging-",
+        // The origins that may open the debugging socket.
+        "remote-allow-origins",
+        // WebView2's own channel for browser switches.
+        "edge-webview-switches",
+    ];
+    if text.contains('\0') {
+        return true;
+    }
+    let plain = text.replace('"', "").to_ascii_lowercase();
+    RESERVED.iter().any(|name| plain.contains(name))
+}
 
 /// Quotes one argument using the Windows command-line backslash/quote rules.
 #[cfg(feature = "cdp")]
@@ -295,9 +316,55 @@ mod tests {
             "--remote-debugging-address=0.0.0.0",
             "--remote-debugging-port=9999",
             "--remote-debugging-pipe",
+            // Chromium reads switch names without regard to case on Windows,
+            // and takes `/` and `-` as well as `--` there.
+            "--REMOTE-DEBUGGING-PORT=9999",
+            "--Remote-Debugging-Address=0.0.0.0",
+            "/remote-debugging-port=9999",
+            "-remote-debugging-pipe",
+            // The origins a debugging socket accepts.
+            "--remote-allow-origins=*",
+            "--REMOTE-ALLOW-ORIGINS=http://evil.example",
+            // Quotes are dropped when the command line is split.
+            "--remote-debugging-\"port\"=9999",
+            "--EDGE-WEBVIEW-SWITCHES=x",
         ] {
             let args = CdpStealthConfig::default().arg(arg).chromium_args();
-            assert!(!args.contains(&arg.to_owned()));
+            assert!(!args.contains(&arg.to_owned()), "{arg} reached {args:?}");
+        }
+    }
+
+    #[test]
+    fn ordinary_arguments_are_kept() {
+        let args = CdpStealthConfig::default()
+            .arg("--lang=en-US")
+            .arg("--user-agent=Tests/1.0")
+            .chromium_args();
+        assert!(args.contains(&"--lang=en-US".to_owned()));
+        assert!(args.contains(&"--user-agent=Tests/1.0".to_owned()));
+    }
+
+    #[test]
+    fn reserved_switches_are_found_in_any_spelling() {
+        for text in [
+            "--remote-debugging-port=1",
+            "--REMOTE-DEBUGGING-PORT=1",
+            "/remote-debugging-address=0.0.0.0",
+            "-remote-debugging-pipe",
+            "--lang=fr --Remote-Allow-Origins=*",
+            "--remote-debugging-\"port\"=1",
+            "--edge-webview-switches=x",
+            "--lang=en\0",
+        ] {
+            assert!(is_reserved(text), "{text:?}");
+        }
+        for text in [
+            "",
+            "--lang=en-US",
+            "--disable-gpu",
+            "--user-agent=Tests/1.0",
+        ] {
+            assert!(!is_reserved(text), "{text:?}");
         }
     }
 }
