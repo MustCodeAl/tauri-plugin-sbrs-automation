@@ -215,9 +215,7 @@ impl<B: Bridge> Driver<B> {
 
     fn route(&self, method: &str, url: &str, body: &[u8]) -> Result<Value, WebDriverError> {
         let path = url.split('?').next().unwrap_or_default();
-        let rest = path
-            .strip_prefix('/')
-            .and_then(|path| path.strip_prefix(self.token.as_str()))
+        let rest = strip_token(path, &self.token)
             .filter(|rest| rest.is_empty() || rest.starts_with('/'))
             .ok_or_else(|| {
                 WebDriverError::new("unknown command", "the URL does not start with the token")
@@ -658,6 +656,32 @@ fn unsupported(message: impl Into<String>) -> WebDriverError {
     WebDriverError::new("unsupported operation", message)
 }
 
+/// The rest of `path` after `/` and `token`, when it starts with them. The
+/// token is compared in full, byte for byte, with [`constant_time_eq`]: a
+/// request must not learn how many leading bytes of a guess were right from
+/// how long the answer took. Only the length of the token can show.
+fn strip_token<'a>(path: &'a str, token: &str) -> Option<&'a str> {
+    let after_slash = path.strip_prefix('/')?;
+    let candidate = after_slash.as_bytes().get(..token.len())?;
+    if !constant_time_eq(candidate, token.as_bytes()) {
+        return None;
+    }
+    // The bytes equal the token's, valid UTF-8, so this is a character boundary.
+    after_slash.get(token.len()..)
+}
+
+/// Whether `a` and `b` hold the same bytes, looking at every byte whenever
+/// the lengths agree: the differences are or-ed together instead of stopping
+/// at the first one. `black_box` keeps the compiler from turning the loop
+/// back into an early exit.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let difference = a.iter().zip(b).fold(0u8, |sum, (x, y)| sum | (x ^ y));
+    std::hint::black_box(difference) == 0
+}
+
 fn unknown(method: &str, path: &str) -> WebDriverError {
     WebDriverError::new(
         "unknown command",
@@ -669,6 +693,47 @@ fn unknown(method: &str, path: &str) -> WebDriverError {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+
+    #[test]
+    fn the_token_comparison_looks_at_every_byte() {
+        assert!(constant_time_eq(b"t0k3n", b"t0k3n"));
+        assert!(constant_time_eq(b"", b""));
+        // A difference in the first, the middle or the last byte, or in the
+        // length, is a mismatch like any other.
+        for other in [&b"X0k3n"[..], b"t0X3n", b"t0k3X", b"t0k3", b"t0k3nn", b""] {
+            assert!(!constant_time_eq(b"t0k3n", other), "{other:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_whole_token_is_stripped_from_the_start_of_the_path() {
+        assert_eq!(strip_token("/t0k/status", "t0k"), Some("/status"));
+        assert_eq!(strip_token("/t0k", "t0k"), Some(""));
+        assert_eq!(strip_token("/t0kX/status", "t0k"), Some("X/status"));
+        // A token with a multi-byte character is compared byte for byte.
+        assert_eq!(strip_token("/t\u{f6}k/a", "t\u{f6}k"), Some("/a"));
+        for path in [
+            "",
+            "/",
+            "t0k/status",
+            "//t0k/status",
+            "/t0",
+            "/T0K/status",
+            "/t0\u{e9}x",
+            "/\u{e9}\u{e9}\u{e9}",
+        ] {
+            assert_eq!(strip_token(path, "t0k"), None, "{path:?}");
+        }
+    }
+
+    #[test]
+    fn a_path_that_cuts_a_character_in_two_is_refused_not_a_panic() {
+        // Byte 3 of "/t0\u{e9}" lies inside the two bytes of the last character.
+        let driver = Driver::new(Fake::default(), "t0k");
+        for path in ["/t0\u{e9}", "/t\u{e9}k/status", "/\u{1f600}/status"] {
+            assert_eq!(driver.handle("GET", path, None, b"").status, 404, "{path}");
+        }
+    }
 
     /// Records each operation. The page's load state (`info` `ready`) comes
     /// from `states` (`complete` when empty), `reset` answers `null`, and
