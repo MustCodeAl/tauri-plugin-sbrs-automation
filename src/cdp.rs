@@ -28,7 +28,10 @@ pub(crate) fn active_port() -> Option<u16> {
 pub struct CdpStealthConfig {
     /// `SBRS_CDP_PORT`, or 9222. Port zero uses 9222 rather than an undiscoverable port.
     pub debugging_port: u16,
-    /// Include the engine stealth arguments (default true).
+    /// Include the few engine stealth arguments (default false: opt in). They
+    /// hide `navigator.webdriver` and stop background throttling; none of them
+    /// turns off a protection of the app's browser. Site isolation, the popup
+    /// blocker and the encryption of stored data stay on.
     pub stealth_args: bool,
     /// Additional trusted arguments. Remote-debugging switches are reserved.
     pub extra_args: Vec<String>,
@@ -43,7 +46,7 @@ impl Default for CdpStealthConfig {
                 .and_then(|port| port.parse().ok())
                 .filter(|port| *port != 0)
                 .unwrap_or(9222),
-            stealth_args: true,
+            stealth_args: false,
             extra_args: Vec::new(),
         }
     }
@@ -58,7 +61,7 @@ impl CdpStealthConfig {
         self
     }
 
-    /// Enables or disables canonical stealth arguments.
+    /// Opts in to (or out of) the stealth arguments. Off by default.
     #[must_use]
     pub fn stealth_args(mut self, enabled: bool) -> Self {
         self.stealth_args = enabled;
@@ -72,7 +75,7 @@ impl CdpStealthConfig {
         self
     }
 
-    /// Returns loopback debugging switches, canonical stealth flags, and extra arguments.
+    /// Returns loopback debugging switches, the opt-in stealth flags, and extra arguments.
     /// Reserved debugging switches in `extra_args` cannot override the local endpoint.
     #[must_use]
     pub fn chromium_args(&self) -> Vec<String> {
@@ -86,7 +89,7 @@ impl CdpStealthConfig {
             "--remote-debugging-address=127.0.0.1".to_owned(),
         ];
         if self.stealth_args {
-            args.extend(ENGINE_ARGS.iter().map(|arg| (*arg).to_owned()));
+            args.extend(STEALTH_ARGS.iter().map(|arg| (*arg).to_owned()));
         }
         args.extend(
             self.extra_args
@@ -146,32 +149,30 @@ impl CdpStealthConfig {
     }
 }
 
-/// Chromium launch flags that reduce engine-level automation signals: a local
-/// copy of `seleniumbase_rs::stealth::engine_spoofing_args()` (seleniumbase-rs,
-/// `src/stealth/patcher.rs`), kept here so the plugin needs no dependency on it.
+/// Opt-in launch flags that reduce automation signals and background throttling,
+/// taken from `engine_spoofing_args()` in seleniumbase-rs (`src/stealth/patcher.rs`),
+/// minus every flag that weakens the browser an app ships. Left out on purpose:
+/// `--disable-features=IsolateOrigins,site-per-process,...` (site isolation, and
+/// the mDNS hiding of local addresses in WebRTC), `--disable-popup-blocking`,
+/// `--disable-client-side-phishing-detection`, `--disable-background-networking`
+/// (updates of component and revocation data), `--password-store=basic` and
+/// `--use-mock-keychain` (the key that encrypts stored cookies and passwords),
+/// and `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` (breaks
+/// WebRTC). The other flags of that list only matter to a stand-alone browser.
+///
+/// Why each remaining flag is safe inside an app:
 #[cfg(feature = "cdp")]
-const ENGINE_ARGS: [&str; 21] = [
+const STEALTH_ARGS: [&str; 5] = [
+    // Blink only stops reporting `navigator.webdriver`; no security setting.
     "--disable-blink-features=AutomationControlled",
-    "--disable-features=IsolateOrigins,site-per-process,PrivacySandboxSettings4,InterestFeedContentSuggestions,FedCm,WebRtcHideLocalIpsWithMdns",
-    "--disable-component-extensions-with-background-pages",
-    "--disable-background-networking",
+    // These three keep timers and rendering running in a window that is in
+    // the background or hidden behind another one, so a test is not slowed
+    // down. They change scheduling only.
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
-    "--disable-client-side-phishing-detection",
-    "--disable-default-apps",
-    "--disable-hang-monitor",
-    "--disable-popup-blocking",
+    // No "resubmit the form?" dialog that a script cannot answer; UI only.
     "--disable-prompt-on-repost",
-    "--disable-sync",
-    "--disable-translate",
-    "--metrics-recording-only",
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--no-pings",
-    "--password-store=basic",
-    "--use-mock-keychain",
-    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
 ];
 
 /// Quotes one argument using the Windows command-line backslash/quote rules.
@@ -204,9 +205,62 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_flags_are_the_local_engine_arguments() {
+    fn stealth_arguments_are_off_by_default() {
+        let config = CdpStealthConfig::default();
+        assert!(!config.stealth_args);
+        let args = config.chromium_args();
+        assert_eq!(args.len(), 2, "{args:?}");
+        assert!(args[0].starts_with("--remote-debugging-port="), "{args:?}");
+        assert_eq!(args[1], "--remote-debugging-address=127.0.0.1");
+    }
+
+    #[test]
+    fn the_stealth_list_is_exactly_the_vetted_one() {
+        assert_eq!(
+            STEALTH_ARGS.to_vec(),
+            [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                "--disable-prompt-on-repost",
+            ]
+        );
+    }
+
+    #[test]
+    fn stealth_never_weakens_the_apps_own_browser() {
+        // Each of these turns off a protection of the browser the app ships:
+        // site isolation, the popup blocker, phishing detection, the update
+        // of component data, the encryption of stored cookies and passwords,
+        // and WebRTC's hiding of the local address.
+        let args = CdpStealthConfig::default()
+            .stealth_args(true)
+            .chromium_args()
+            .join(" ");
+        for weakening in [
+            "--disable-features",
+            "site-per-process",
+            "IsolateOrigins",
+            "WebRtcHideLocalIpsWithMdns",
+            "--disable-popup-blocking",
+            "--disable-client-side-phishing-detection",
+            "--disable-background-networking",
+            "--password-store",
+            "--use-mock-keychain",
+            "--force-webrtc-ip-handling-policy",
+            "--no-sandbox",
+            "--disable-web-security",
+        ] {
+            assert!(!args.contains(weakening), "{weakening} in {args}");
+        }
+    }
+
+    #[test]
+    fn opt_in_stealth_adds_exactly_the_vetted_arguments() {
         let config = CdpStealthConfig::default()
             .debugging_port(9333)
+            .stealth_args(true)
             .arg("--lang=en-US");
         let args = config.chromium_args();
         assert_eq!(
@@ -216,7 +270,7 @@ mod tests {
                 "--remote-debugging-address=127.0.0.1"
             ]
         );
-        assert_eq!(&args[2..args.len() - 1], ENGINE_ARGS);
+        assert_eq!(&args[2..args.len() - 1], STEALTH_ARGS);
         assert_eq!(args.last().unwrap(), "--lang=en-US");
     }
 

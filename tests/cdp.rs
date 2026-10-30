@@ -38,8 +38,12 @@ fn cdp_discovery_uses_the_existing_authentication_guards() {
 fn chromium_configuration_is_available_to_an_app() {
     let args = tauri_plugin_sbrs_automation::cdp::CdpStealthConfig::default()
         .debugging_port(9333)
+        .stealth_args(true)
         .chromium_args();
     assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_owned()));
     assert!(args.contains(&"--remote-debugging-port=9333".to_owned()));
     assert!(args.contains(&"--disable-blink-features=AutomationControlled".to_owned()));
+    // Site isolation of the app's own browser stays on.
+    assert!(!args.iter().any(|arg| arg.contains("site-per-process")));
+    assert!(!args.iter().any(|arg| arg.starts_with("--disable-features")));
 }
