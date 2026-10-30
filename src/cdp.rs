@@ -114,7 +114,13 @@ impl CdpStealthConfig {
         if !crate::Settings::automation_enabled() {
             return Vec::new();
         }
-        let existing = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
+        let existing = match std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
+            Ok(value) => value,
+            Err(std::env::VarError::NotPresent) => String::new(),
+            // Text that is not Unicode can be neither checked nor extended
+            // without changing it.
+            Err(std::env::VarError::NotUnicode(_)) => return Vec::new(),
+        };
         // These switches can bypass or supersede the TCP endpoint. Refuse
         // activation rather than advertising a different endpoint to clients.
         if is_reserved(&existing) {

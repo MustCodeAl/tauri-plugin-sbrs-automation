@@ -1,6 +1,7 @@
 //! Environment mutation is tested only in fresh, single-threaded child processes.
 
 use serde_json::{Value, json};
+use std::ffi::OsStr;
 use std::process::Command;
 use std::time::Duration;
 use tauri_plugin_sbrs_automation::cdp::CdpStealthConfig;
@@ -19,7 +20,7 @@ fn main() {
         return;
     }
     let exe = std::env::current_exe().unwrap();
-    let run = |gate: &str, port: Option<&str>, webview2: &str, expect: &str| {
+    let run = |gate: &str, port: Option<&str>, webview2: &OsStr, expect: &str| {
         let mut command = Command::new(&exe);
         command
             .arg("probe")
@@ -41,9 +42,17 @@ fn main() {
         );
     };
     for port in ["9333", "invalid", "0"] {
-        run("1", Some(port), "--lang=fr-FR", "on");
+        run("1", Some(port), OsStr::new("--lang=fr-FR"), "on");
     }
-    run("0", Some("9333"), "--lang=fr-FR", "off");
+    run("0", Some("9333"), OsStr::new("--lang=fr-FR"), "off");
+    // Text that is not UTF-8 is not a reason to skip the check.
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let existing = OsStr::from_bytes(b"--remote-debugging-port=1234 \xff");
+        run("1", None, existing, "off");
+    }
+
     // An environment that already carries a reserved switch, in any spelling,
     // is refused: the plugin cannot say which endpoint would be the app's.
     for existing in [
@@ -55,7 +64,7 @@ fn main() {
         "--remote-debugging-\"port\"=1234",
         "--edge-webview-switches=--remote-debugging-port=1",
     ] {
-        run("1", None, existing, "off");
+        run("1", None, OsStr::new(existing), "off");
     }
 }
 
