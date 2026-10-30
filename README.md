@@ -121,10 +121,74 @@ everywhere.
 
 ## Optional Chromium CDP integration
 
-Enable the `cdp` feature for app-owned CEF or Windows WebView2 (Rust 1.99).
-`cdp::CdpStealthConfig` reuses seleniumbase-rs's canonical stealth arguments
-through a pinned Git dependency. The authenticated `GET /<token>/cdp` route
-advertises `SBRS_CDP_PORT`; `/status` and the WebDriver bridge stay unchanged.
+For an app that ships its own Chromium (**CEF**, or **WebView2** on Windows)
+the plugin can say where the Chrome DevTools Protocol listens, so a client can
+attach to the app's real browser. The `cdp` feature adds the launch settings,
+`cdp::CdpStealthConfig`; it has no dependencies. The discovery route
+`GET /<token>/cdp` is always there; `/status` and the WebDriver bridge are
+unchanged.
+
+> [!WARNING]
+> **The CDP socket itself has no authentication.** Only the discovery route is
+> protected (the secret token in the URL, loopback only, no request from a web
+> page). The debugging port Chromium opens accepts every process on the
+> machine, and every other user of a shared one: whoever connects can run
+> script in each page of your app, read what it stores and drive its windows.
+> Tauri's own CEF guide says the same of `remote_debugging` on a port: it is
+> reachable by every process on the machine. Keep it **off in release
+> builds**: put the `cdp` feature behind the same Cargo feature as the plugin,
+> and never turn the gate on for a shipped app. The launch settings produce no
+> debugging switch (`chromium_args()` is empty, `apply_env()` does nothing)
+> unless the automation gate is on: a debug build, or `SBRS_AUTOMATION` set to
+> `1`, `true` or `on`.
+
+Set it up before Tauri starts:
+
+- **WebView2** (Windows): call `unsafe { CdpStealthConfig::default().apply_env() }`
+  at the start of `main`, before any thread. It appends the switches to
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, which WebView2 reads when it creates
+  its environment, so it has to be set before the first webview exists
+  ([Microsoft's docs](https://learn.microsoft.com/en-us/microsoft-edge/webview2/how-to/remote-debugging-desktop)).
+  The variable therefore stays in the environment, and a child process you
+  start inherits the debugging switches: remove it for a child that must not
+  have a debugger (`Command::env_remove("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")`).
+  `apply_env` refuses (does nothing, returns nothing) when the variable
+  already holds a `--remote-debugging-*`, `--remote-allow-origins` or
+  `--edge-webview-switches` switch, in any case and with any prefix (`--`,
+  `-`, `/`), or text that is not Unicode.
+- **CEF**: pass `CdpStealthConfig::default().chromium_args()` to Chromium's
+  command line (Tauri's `Cef::command_line_arg` takes the name without the
+  leading `--` and an optional value), or, if you set up
+  `Cef::remote_debugging` yourself, take the port from
+  `CdpStealthConfig::default().port()`. See the
+  [Tauri CEF guide](https://v3.tauri.app/develop/cef/#command-line-and-features).
+
+Either way the plugin reads, once when it starts, the port the launch
+settings enabled in this process. It never reads it from the environment of a
+parent process, and `apply_env` exports nothing but the WebView2 variable.
+
+| Setting | Behaviour |
+|---|---|
+| `SBRS_CDP_PORT` | Optional, and read only by `CdpStealthConfig::default()`: a valid non-zero port to ask for. Unset, invalid or `0`: a **free loopback port is picked**, the same one for the life of the process. A port that is asked for but in use enables nothing and says so on stderr, so a client cannot end up at another browser. |
+| `CdpStealthConfig::stealth_args(true)` | Off by default. Adds five flags: `--disable-blink-features=AutomationControlled`, the three background-throttling flags and `--disable-prompt-on-repost`. seleniumbase-rs's longer list is **not** used: it turns off site isolation, the popup blocker, phishing detection, component updates and the encryption of stored cookies and passwords in your app's own browser. |
+| `CdpStealthConfig::arg(..)` | Your own trusted arguments. Anything that names a `--remote-debugging-*`, `--remote-allow-origins` or `--edge-webview-switches` switch (any case, any prefix) is dropped, and so is an argument with a NUL byte. |
+
+`GET /<token>/cdp` answers with the port only while a Chromium debugger
+answers `GET /json/version` there:
+
+```json
+{ "value": { "cdpEnabled": true, "cdpPort": 51234, "cdpUrl": "http://127.0.0.1:51234", "cdpState": "ready" } }
+```
+
+`cdpState` is `disabled` (the launch settings enabled no port: gate off, port
+in use, or not set up), `unreachable` (a port was chosen, but nothing answers
+like Chromium there yet, or something else holds it; `cdpEnabled` is false and
+the port is not named) or `ready`. This confirms that a Chromium debugger
+listens on that port. It does **not** prove the browser is your app's own: a
+second browser that took the port between the choice of a free port and the
+start of Chromium would pass, which a free port makes unlikely. A client that
+needs to be sure should look at the targets (`/json/list`) for the app's
+window.
 
 Runtime setup, environment safety, direct attachment, fingerprint stealth and
 seleniumbase-rs plugin support are documented in the main repository's
@@ -320,6 +384,10 @@ WebDriver's "execute script" is for. So it is guarded:
 - requests from web pages (any request with an `Origin` header) are refused.
 
 Keep it behind a Cargo feature that release builds do not enable.
+
+The optional [Chromium CDP integration](#optional-chromium-cdp-integration)
+opens a second door: the debugging socket of the app's own Chromium. That one
+has **no authentication** of its own; read the warning there before you use it.
 
 ## License
 
