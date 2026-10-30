@@ -195,6 +195,109 @@ seleniumbase-rs plugin support are documented in the main repository's
 [Tauri guide](https://mustcodeal-seleniumbase-rs.docs7.io/ecosystem/tauri#app-owned-chromium-cef-and-webview2)
 ([source](https://github.com/MustCodeAl/seleniumbase-rs/blob/main/docs/ecosystem/tauri.md)).
 
+## Stealth inside the app (optional `stealth` feature)
+
+The features above are for tests. The `stealth` feature is for a **shipped
+app** that embeds its own browser view and wants seleniumbase-rs's fingerprint
+stealth in it. It opens **no debugging port and no listener**, needs no
+automation gate and does not start the WebDriver endpoint: it uses only the
+webview's own channels, inside the app's process.
+
+```toml
+[dependencies]
+tauri-plugin-sbrs-automation = { git = "https://github.com/MustCodeAl/tauri-plugin-sbrs-automation", features = ["stealth"] }
+```
+
+The feature brings the seleniumbase-rs library (from git, pinned to a commit,
+about 90 packages) and so needs **Rust 1.99**, its minimum version; the rest
+of the plugin still builds with 1.88. A git dependency also keeps the plugin
+off crates.io.
+
+A fingerprint's `StealthPlan` has two parts, and each webview takes what it
+can:
+
+| Runtime | Init script (page-visible values) | Overrides (user agent and Client Hints, locale, time zone, geolocation, screen metrics, ...) |
+|---|---|---|
+| CEF (`tauri-runtime-cef`) | yes | yes, through `send_dev_tools_message` and `on_dev_tools_protocol` |
+| WebView2 (Windows) | yes | yes, through `CallDevToolsProtocolMethod` and DevTools event receivers |
+| WKWebView (macOS), WebKitGTK (Linux) | yes | no: these webviews speak no DevTools Protocol |
+
+1. **The init script**, on every runtime, while the window is built. It runs
+   in every document, frames included, before the page's own scripts:
+
+   ```rust
+   use tauri_plugin_sbrs_automation::stealth::{Fingerprint, OsType, StealthPlan, StealthScriptExt};
+
+   let plan = StealthPlan::new(&Fingerprint::randomized(OsType::Windows, 7));
+   tauri::WebviewWindowBuilder::new(app, "browser", tauri::WebviewUrl::App("index.html".into()))
+       .stealth_script(&plan)
+       .build()?;
+   ```
+
+2. **The overrides**, on CEF and WebView2, once the webview exists, through a
+   `stealth::DevToolsChannel`: `channel.apply(&plan).await` sends them in
+   order, each after the answer to the one before. They apply from the next
+   request and document on, so open the window at a page of your own and go
+   to the outside site after `apply` has returned.
+
+3. **Driving the view** (optional): `channel.page().await` is a seleniumbase-rs
+   `Page` for that webview, with `goto`, locators and human input. Preparing
+   it installs the library's page helper in the webview's documents; the
+   stealth alone does not.
+
+This plugin pins Tauri `3.0.0-alpha.4` and builds without a runtime, so it
+cannot name the runtimes' DevTools types. It ships tested bridges, and the app
+joins them to its runtime with a few lines.
+
+**CEF**, with the DevTools API that `tauri-runtime-cef` 3.0.0-alpha.6
+documents (that release needs Tauri 3.0.0-alpha.5 or later, so it cannot be
+combined with this plugin's current Tauri pin; `tauri-runtime-cef`
+3.0.0-alpha.4 has no published documentation to check it against). Request
+ids come from the runtime's allocator, because every observer sees every
+result:
+
+```rust
+use tauri_runtime_cef::{allocate_devtools_message_id, DevToolsProtocol, WebviewCefExt};
+use tauri_plugin_sbrs_automation::stealth::cef;
+
+let sender = webview.clone();
+let (channel, observer) = cef::channel(
+    move |message| Ok(sender.send_dev_tools_message(message)?),
+    || Ok(allocate_devtools_message_id()?),
+);
+webview.on_dev_tools_protocol(move |protocol| match protocol {
+    DevToolsProtocol::MethodResult { message_id, success, result } => {
+        observer.method_result(message_id, success, &result)
+    }
+    DevToolsProtocol::Event { method, params } => observer.event(&method, &params),
+    DevToolsProtocol::Message(_) => {}
+})?;
+tauri::async_runtime::spawn(async move { channel.apply(&plan).await });
+```
+
+**WebView2**: `stealth::webview2::channel(call)` hands each command to `call`
+as a `webview2::Call` (`method`, `params_json`, `session_id`). Make the call on
+the UI thread with `webview2-com` (`ICoreWebView2::CallDevToolsProtocolMethod`,
+reached through `Webview::with_webview` and the controller), and in its
+completion handler run `call.reply.complete(error_code_is_success, &json)`.
+Subscribe to each event in `webview2::EVENTS` with
+`GetDevToolsProtocolEventReceiver` and pass it on with
+`webview2::event(channel.inbox(), name, &parameter_json, session_id)`.
+
+A channel reaches one page: it opens no tabs and no browser contexts, and
+`Browser.*` commands, the permission grant among them, are not available
+there. The `cdp` feature's debugging port and launch flags
+(`CdpStealthConfig::stealth_args`) stay opt-in, gated and for tests only; the
+`stealth` feature uses neither.
+
+> [!NOTE]
+> **Not run on a real app.** The bridges are tested in Rust against fake CEF
+> and WebView2 channels (ids, results, errors, events, ordering, a navigation
+> that waits for the load event). The CEF and WebView2 glue above has not been
+> compiled or run here: there is no WebView2 on macOS, and this plugin's Tauri
+> pin predates the documented CEF DevTools API.
+
+
 ## Run a test
 
 Start the app with a token of your choice (or read the random one it prints):
@@ -388,6 +491,12 @@ Keep it behind a Cargo feature that release builds do not enable.
 The optional [Chromium CDP integration](#optional-chromium-cdp-integration)
 opens a second door: the debugging socket of the app's own Chromium. That one
 has **no authentication** of its own; read the warning there before you use it.
+
+The [`stealth` feature](#stealth-inside-the-app-optional-stealth-feature)
+opens no door: no port, no listener, no endpoint. Its DevTools channels are the
+webview's own, inside the app's process, and only the app's code holds them.
+Its init script runs in every frame of the webview, third-party frames
+included, as a fingerprint must.
 
 ## License
 

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Add the optional `stealth` feature: seleniumbase-rs's fingerprint stealth in
+  the app's own webviews, for a shipped app. `stealth::StealthScriptExt`
+  adds a `StealthPlan`'s init script to a `WebviewWindowBuilder` for every
+  frame (all runtimes); a `stealth::DevToolsChannel` sends the plan's
+  overrides in order through the webview's in-process DevTools channel
+  (`apply`) and gives a seleniumbase-rs `Page` for the webview (`page`).
+  `stealth::cef::channel` bridges CEF's `send_dev_tools_message` /
+  `on_dev_tools_protocol` (request ids from the runtime's allocator) and
+  `stealth::webview2::channel` bridges WebView2's
+  `CallDevToolsProtocolMethod` and event receivers; the app joins them to its
+  runtime (README). No port, no listener, no automation gate. The feature
+  depends on seleniumbase-rs from git (pinned commit) and needs Rust 1.99;
+  a default build and the `cdp` feature are unchanged. Tested against fake
+  channels only; not run in a real CEF or WebView2 app.
+
 - Add the optional `cdp` feature: launch settings (`cdp::CdpStealthConfig`)
   for an app-owned CEF or WebView2 that open Chromium's debugging port on
   `127.0.0.1`. It has no dependencies and does not raise the minimum Rust
