@@ -14,6 +14,12 @@ default = []
 # Optional Chromium launch settings for an app-owned CEF or WebView2. No
 # dependencies: the few flags it needs are kept in `src/cdp.rs`.
 cdp = []
+# seleniumbase-rs's stealth in the app's own webviews, fit for a release build:
+# a fingerprint's init script on every runtime, and its overrides through the
+# in-process DevTools channel of CEF or WebView2 (no port, no listener), plus
+# the library's `Page` API over that channel. Brings the seleniumbase-rs
+# library from git, which needs Rust 1.99 (see the README).
+stealth = ["dep:seleniumbase-rs"]
 
 [[test]]
 name = "cdp_env"
@@ -26,6 +32,9 @@ tauri = { version = "=3.0.0-alpha.4", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny_http = "0.12"
+# Feature `stealth` only. Pinned to a commit: the plugin and the app must agree
+# on the library's types (`StealthPlan`, `Page`), so bump it deliberately.
+seleniumbase-rs = { git = "https://github.com/MustCodeAl/seleniumbase-rs", rev = "d7fc5e9801b10c112d0e17a8799c016991e29e98", default-features = false, optional = true }
 
 [build-dependencies]
 tauri-plugin = { version = "=3.0.0-alpha.3", features = ["build"] }
@@ -43,3 +52,5 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std"
 
 [dev-dependencies]
 sha2 = "0.10"
+# The `stealth` tests drive the library over a fake channel.
+tokio = { version = "1.53", features = ["macros", "rt", "sync", "time"] }

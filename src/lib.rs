@@ -22,6 +22,10 @@
 //! token: `SBRS_AUTOMATION_TOKEN`, or a random one printed at start-up. With
 //! `SBRS_AUTOMATION_TRACE_WINDOW` set, the window commands print the window's
 //! state on stderr, for finding out why a resize did not stick.
+//!
+//! With the `stealth` feature, the `stealth` module gives the app's own
+//! webviews seleniumbase-rs's fingerprint stealth for a shipped build: no
+//! port, no listener and no automation gate.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -38,6 +42,8 @@ mod native;
 #[cfg(target_os = "macos")]
 mod screenshot;
 mod server;
+#[cfg(feature = "stealth")]
+pub mod stealth;
 mod trace;
 pub mod webdriver;
 mod window;
