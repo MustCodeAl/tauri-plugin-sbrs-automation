@@ -18,8 +18,8 @@ fn seleniumbase_rs_is_only_an_optional_dependency_of_the_stealth_feature() {
         "{dependency}"
     );
     assert!(
-        dependency.contains("rev = \""),
-        "pinned to a commit: {dependency}"
+        dependency.contains("tag = \"v"),
+        "pinned to a release tag: {dependency}"
     );
     let feature = MANIFEST
         .lines()
