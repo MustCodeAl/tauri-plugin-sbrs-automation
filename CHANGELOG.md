@@ -13,9 +13,16 @@
   `stealth::webview2::channel` bridges WebView2's
   `CallDevToolsProtocolMethod` and event receivers; the app joins them to its
   runtime (README). No port, no listener, no automation gate. The feature
-  depends on seleniumbase-rs from git (pinned commit) and needs Rust 1.99;
+  depends on seleniumbase-rs from git (the `v0.7.0` tag) and needs Rust 1.99;
   a default build and the `cdp` feature are unchanged. Tested against fake
   channels only; not run in a real CEF or WebView2 app.
+
+- The `stealth` feature's seleniumbase-rs dependency moves from a commit to the
+  `v0.7.0` tag (`tests/manifest.rs` now asks for a release tag). Nothing in the
+  plugin needed to change: it uses `sb_cdp` and the root re-exports only, not
+  the `stealth` module that 0.7.0 renamed `evasion`. The README's test example
+  imports Tokio from `seleniumbase_rs::tokio`, so a test crate needs no `tokio`
+  line, and its `assert_text` takes the text first.
 
 - Add the optional `cdp` feature: launch settings (`cdp::CdpStealthConfig`)
   for an app-owned CEF or WebView2 that open Chromium's debugging port on

@@ -208,7 +208,7 @@ webview's own channels, inside the app's process.
 tauri-plugin-sbrs-automation = { git = "https://github.com/MustCodeAl/tauri-plugin-sbrs-automation", features = ["stealth"] }
 ```
 
-The feature brings the seleniumbase-rs library (from git, pinned to a commit,
+The feature brings the seleniumbase-rs library (from git, pinned to the `v0.7.0` tag,
 about 90 packages) and so needs **Rust 1.99**, its minimum version; the rest
 of the plugin still builds with 1.88. A git dependency also keeps the plugin
 off crates.io.
@@ -312,7 +312,7 @@ without the slash the token is replaced and every request is refused with
 `the URL does not start with the token`.
 
 ```rust
-use seleniumbase_rs::{BaseCase, BrowserConfig};
+use seleniumbase_rs::{tokio, BaseCase, BrowserConfig};
 
 #[tokio::test]
 async fn saving_a_profile() -> Result<(), seleniumbase_rs::SeleniumBaseError> {
@@ -320,7 +320,7 @@ async fn saving_a_profile() -> Result<(), seleniumbase_rs::SeleniumBaseError> {
     let mut sb = BaseCase::new(config).await?;
     sb.type_text("#name", "Work").await?;
     sb.click("#save").await?;
-    sb.assert_text("#status", "Saved").await?;
+    sb.assert_text("Saved", "#status").await?;
     sb.quit().await
 }
 ```
