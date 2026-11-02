@@ -209,9 +209,8 @@ tauri-plugin-sbrs-automation = { git = "https://github.com/MustCodeAl/tauri-plug
 ```
 
 The feature brings the seleniumbase-rs library (from git, pinned to the `v0.7.0` tag,
-about 90 packages) and so needs **Rust 1.99**, its minimum version; the rest
-of the plugin still builds with 1.88. A git dependency also keeps the plugin
-off crates.io.
+about 90 packages). The whole plugin needs **Rust 1.99**, the library's minimum
+and the newest stable. A git dependency also keeps the plugin off crates.io.
 
 A fingerprint's `StealthPlan` has two parts, and each webview takes what it
 can:
