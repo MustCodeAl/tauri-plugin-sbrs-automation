@@ -2,16 +2,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use seleniumbase_rs::init_tracing;
-use tauri::{command, generate_context, generate_handler, Manager, State};
+use tauri::{command, generate_context, generate_handler, AppHandle, Manager, Runtime, State};
 use tracing::{error, info};
 
 mod api;
+mod app_window;
 mod models;
 mod passphrase;
 mod session;
 mod storage;
 mod store;
 
+use app_window::ProfileWindow;
 use models::{NewProfile, Profile, RandomizeRequest, Randomized, SessionInfo, StorageStatus};
 use seleniumbase_rs::OsType;
 use session::Session;
@@ -115,6 +117,30 @@ async fn launch_profile(
         "launched profile"
     );
     Ok(info)
+}
+
+/// Opens a profile in a window of the app itself, with its fingerprint's
+/// script in every page, through the plugin's stealth (see [`app_window`]).
+#[command]
+async fn open_profile_window<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    url: Option<String>,
+) -> Result<(), String> {
+    let profile = state
+        .profiles
+        .lock()
+        .await
+        .iter()
+        .find(|p| p.id == id)
+        .cloned()
+        .ok_or_else(|| "Profile not found".to_string())?;
+    let window = ProfileWindow::plan(&profile, url.as_deref())?;
+    let label = window.label.clone();
+    window.open(&app)?;
+    info!(profile_id = %profile.id, window = %label, "opened profile in an app window");
+    Ok(())
 }
 
 #[command]
@@ -235,6 +261,7 @@ pub fn run() {
             delete_profile,
             randomize_fingerprint,
             launch_profile,
+            open_profile_window,
             list_sessions,
             navigate_session,
             take_screenshot,

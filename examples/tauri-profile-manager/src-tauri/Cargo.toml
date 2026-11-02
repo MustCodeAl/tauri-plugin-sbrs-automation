@@ -19,10 +19,10 @@ name = "tauri_profile_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
-# Serves the app's window over WebDriver (127.0.0.1, behind a token) through
-# `tauri-plugin-sbrs-automation`, for the end-to-end test in
+# Serves the app's window over WebDriver (127.0.0.1, behind a token): it
+# registers `tauri_plugin_sbrs_automation::init()`, for the end-to-end test in
 # `tests/e2e_automation.rs`. Never enable it in a build you ship.
-e2e = ["dep:tauri-plugin-sbrs-automation"]
+e2e = []
 
 [build-dependencies]
 tauri-build = { version = "=3.0.0-alpha.3", features = [] }
@@ -55,9 +55,11 @@ keyring = { version = "4.2", default-features = false, features = ["v1"] }
 getrandom = "0.4"
 # SHA-256 of the legacy files, to recognise one that was already imported.
 ring = "0.17"
-# The WebDriver endpoint inside the app, only with the `e2e` feature: the
-# plugin of this repository. An app of your own takes it by `git` instead.
-tauri-plugin-sbrs-automation = { path = "../../..", optional = true }
+# The plugin of this repository (an app of your own takes it by `git`). Its
+# `stealth` feature gives a profile's app window the profile's fingerprint
+# (`src/app_window.rs`) and is fit for a shipped build: no port, no listener.
+# Its WebDriver endpoint is registered only with the `e2e` feature.
+tauri-plugin-sbrs-automation = { path = "../../..", features = ["stealth"] }
 
 [dev-dependencies]
 # `test-util` adds `sb_cdp::Browser::new_mocked`, so Pure CDP sessions can be

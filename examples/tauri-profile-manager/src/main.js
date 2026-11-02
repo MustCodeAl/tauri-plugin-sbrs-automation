@@ -146,7 +146,19 @@ function renderProfiles() {
         setStatus(`Launch failed: ${e}`);
       }
     });
-    launchRow.append(urlInput, launchBtn);
+    // A window of the app itself, with the profile's fingerprint script in
+    // every page (the plugin's stealth): no Chrome and no container.
+    const windowBtn = el("button", { className: "secondary", text: "Open in app" });
+    windowBtn.setAttribute("aria-label", `Open ${p.name} in a window of this app`);
+    windowBtn.addEventListener("click", async () => {
+      try {
+        await invoke("open_profile_window", { id: p.id, url: urlInput.value || undefined });
+        setStatus(`Opened ${p.name} in an app window`);
+      } catch (e) {
+        setStatus(`Open in app failed: ${e}`);
+      }
+    });
+    launchRow.append(urlInput, launchBtn, windowBtn);
     card.appendChild(launchRow);
 
     const manageRow = el("div", { className: "actions" });

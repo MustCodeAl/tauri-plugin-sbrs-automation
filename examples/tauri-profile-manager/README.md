@@ -1,6 +1,11 @@
 # Tauri Profile Manager
 
-A desktop multi-profile browser manager built with [Tauri](https://tauri.app) and `seleniumbase-rs`. Each profile is its own isolated browser identity, driven either through a dedicated Docker WebDriver container or through a Chrome the app launches itself (Pure CDP).
+A desktop multi-profile browser manager built with [Tauri](https://tauri.app), `seleniumbase-rs` and this repository's plugin, `tauri-plugin-sbrs-automation`. Each profile is its own browser identity, driven through a dedicated Docker WebDriver container or a Chrome the app launches itself (Pure CDP), or opened in a window of the app itself with the profile's fingerprint (the plugin's `stealth` feature).
+
+It shows two of the plugin's uses:
+
+- **Stealth inside the app** ([Open in an app window](#open-in-an-app-window)): `stealth::StealthScriptExt` gives a webview window of the app a fingerprint's init script. Fit for a shipped build: no port and no listener.
+- **A test driving the app** ([End-to-end test](#end-to-end-test)): `init()` serves the app's window over WebDriver, so `BaseCase` drives it. Only the `e2e` feature registers it.
 
 ## Architecture
 
@@ -9,6 +14,7 @@ A desktop multi-profile browser manager built with [Tauri](https://tauri.app) an
   [Tauri versions](#tauri-versions).
 - **Profile store** — an encrypted vault (`profiles.vault`) in the OS app-data directory. See [Profile storage](#profile-storage).
 - **Two engines** — each profile picks one. See [Engines](#engines).
+- **App windows** — any profile with a fingerprint also opens in a window of the app. See [Open in an app window](#open-in-an-app-window).
   - **WebDriver** — `seleniumbase-rs::BaseCase` connects to a `selenium/standalone-chrome` container with per-profile `user_agent`, `proxy`, `locale`, and `headless` settings.
   - **Pure CDP** — Chrome is launched directly and driven over the DevTools Protocol. No Docker, no WebDriver.
 
@@ -44,6 +50,32 @@ Limits worth knowing:
 The identity claims *this machine's* operating system unless the request names another, because a page can still see the real graphics stack and fonts behind a different claim. The same operating system and seed always give the same identity. Without a seed a fresh 53-bit one is drawn (53 bits so JavaScript can show and return it exactly), and the response reports it.
 
 The claimed Chrome version comes from a short window of recent releases. Pair it with a browser of that era, or edit the user agent, client hints and core version together.
+
+## Open in an app window
+
+`Open in app` on a profile card opens the profile in a new window of the app: the system webview (WKWebView on macOS, WebView2 on Windows, WebKitGTK on Linux), not Chrome, with no container and no WebDriver. It goes to the card's start URL, or `about:blank` without one; only `http` and `https` pages open.
+
+The window carries the profile's fingerprint (its own, else its imported profile's), through the plugin's stealth:
+
+```rust
+use tauri_plugin_sbrs_automation::stealth::{StealthPlan, StealthScriptExt};
+
+WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
+    .incognito(true)
+    .stealth_script(&StealthPlan::new(&fingerprint))
+    .build()?;
+```
+
+`src-tauri/src/app_window.rs` is the whole of it; the `open_profile_window` command calls it.
+
+What the window gets, and what it does not:
+
+- **The fingerprint's init script**, in every document and frame, before the page's own scripts, so what they read (`navigator`, `screen` and the rest) is the fingerprint's. Every runtime takes it.
+- **Not the protocol overrides** (the user agent and Client Hints the network sees, locale, time zone, geolocation): they need the webview's DevTools channel. WKWebView and WebKitGTK have none; WebView2 has one, which the plugin bridges (`stealth::webview2`), but this example does not wire it up. A Pure CDP launch applies both parts.
+- **No proxy and no cookies** from the profile. Each window is new and incognito: it starts from the profile's current fingerprint, shares no storage with the app's own window or another profile's, and keeps nothing on disk once closed.
+- **No access to the app.** No capability names a profile window, so the site in it cannot call the app's commands.
+
+A profile without a fingerprint is refused: `Randomize` gives it one.
 
 ## Profile storage
 
@@ -86,7 +118,15 @@ VNC password is `secret` by default.
 ## Start the Tauri app
 
 Needs Rust 1.99 or newer, the version `seleniumbase-rs` requires (Tauri 3
-needs 1.95). The Tauri CLI comes from npm, pinned to the same alpha:
+needs 1.95), and Node LTS (`brew install node`, `winget install
+OpenJS.NodeJS.LTS`). On Windows it uses WebView2, which comes with Windows 10
+and 11. On Debian and Ubuntu:
+
+```bash
+sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libssl-dev libx11-dev libxdo-dev
+```
+
+The Tauri CLI comes from npm, pinned to the same alpha:
 
 ```bash
 npm ci
@@ -124,12 +164,15 @@ does not follow `HOME`). The window opens on screen while it runs, but clicks
 and typing are DOM events, so the mouse and keyboard stay yours. Ports 4545 and
 45001 (the REST API) must be free.
 
-- `Cargo.toml` takes the plugin from a local checkout (`path = ...`). Without
-  one, use the `git` line written next to it.
+- `Cargo.toml` takes the plugin from this repository (`path = "../../.."`);
+  an app of your own takes it by `git`. The plugin is always built in, for
+  its `stealth` feature; the `e2e` feature only registers `init()`.
+- `seleniumbase-rs` comes by git at the `v0.7.0` tag, the one the plugin's
+  `stealth` feature pins, so the app and the plugin share one copy of the
+  library and its types (`Fingerprint`, `StealthPlan`).
 - The permission the plugin's script needs, `sbrs-automation:default`, is in
   `capabilities/e2e/automation.json`. `build.rs` reads that folder only with the
-  `e2e` feature: without the plugin the permission does not exist, and the
-  build would refuse a capability that names it.
+  `e2e` feature, so other builds do not grant it.
 - `BaseCase` is pointed at `http://127.0.0.1:4545/e2etoken/`, with a trailing
   slash. The WebDriver client joins each command path to the server URL as a
   relative URL, so without the slash the token would be replaced and every
@@ -141,9 +184,11 @@ It passed on macOS on 2026-10-15, in about 6 seconds once built.
 
 The app builds on Tauri `3.0.0-alpha.4` (`tauri`, `tauri-runtime-wry`
 `3.0.0-alpha.4`, `tauri-build` `3.0.0-alpha.3`, `tauri-plugin-opener`
-`3.0.0-alpha.2`, `@tauri-apps/cli` `3.0.0-alpha.4`). On macOS its 115 tests
-pass, `npx tauri build --debug --bundles app` makes the `.app`, and the window
-opens and is driven by the [end-to-end test](#end-to-end-test).
+`3.0.0-alpha.2`, `@tauri-apps/cli` `3.0.0-alpha.4`). On macOS its 121 tests
+pass (one more is ignored; 2026-11-02, in this repository). Before the move,
+in seleniumbase-rs, `npx tauri build --debug --bundles app` made the `.app`, and
+the window opened and was driven by the [end-to-end test](#end-to-end-test)
+(2026-10-15); neither has been run here yet.
 
 Moving from Tauri 2 needed one code change: Tauri 3 starts no runtime unless
 the app names one, so `run` passes `tauri_runtime_wry::Wry::default()` to
@@ -167,6 +212,7 @@ existed then is the separate crate `seleniumbase-rs-playwright` now.)
 
 - Create / delete isolated browser profiles, stored encrypted at rest.
 - Launch a profile against any WebDriver container, or as a Chrome of its own over Pure CDP, with no Docker.
+- Open a profile in a window of the app, with its fingerprint's script (the plugin's stealth).
 - Give a profile a random, internally consistent identity in one click.
 - Navigate, screenshot, and close sessions from the UI.
 - Per-profile fingerprint hints: user agent, locale, proxy, headless.
