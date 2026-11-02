@@ -36,10 +36,14 @@ pub struct ProfileWindow {
     pub label: String,
     /// The window's title: the profile's name.
     pub title: String,
-    /// The page the window opens.
+    /// The page the window goes to, once the stealth is in place.
     pub url: Url,
     /// The stealth of the profile's fingerprint.
     pub plan: StealthPlan,
+    /// The profile's cookies, set before the window goes to `url`.
+    pub cookies: Vec<BrowserCookie>,
+    /// The profile's proxy, when it names one a webview can use.
+    pub proxy: Option<ProxyUrl>,
 }
 
 impl ProfileWindow {
@@ -52,36 +56,77 @@ impl ProfileWindow {
     /// When the profile has no fingerprint, its id cannot be part of a window
     /// label, or `url` is not an `http` or `https` address.
     pub fn plan(profile: &Profile, url: Option<&str>) -> Result<Self, String> {
-        let url = start_url(url)?;
-        let label = window_label(&profile.id)?;
-        let fingerprint = build_config(profile).fingerprint.ok_or_else(|| {
-            format!(
-                "\"{}\" has no fingerprint to open with: randomize it or set one first",
-                profile.name
-            )
-        })?;
-        Ok(Self {
-            label,
-            title: profile.name.clone(),
-            url,
-            plan: StealthPlan::new(&fingerprint),
-        })
-    }
+            let url = start_url(url)?;
+            let label = window_label(&profile.id)?;
+            let config = build_config(profile);
+            let fingerprint = config.fingerprint.ok_or_else(|| {
+                format!(
+                    "\"{}\" has no fingerprint to open with: randomize it or set one first",
+                    profile.name
+                )
+            })?;
+            let proxy = proxy_url(config.proxy.as_deref());
+            if config.proxy.is_some() && proxy.is_none() {
+                warn!(profile_id = %profile.id, "the proxy is not an http or socks5 address: the window opens without it");
+            }
+            Ok(Self {
+                label,
+                title: profile.name.clone(),
+                url,
+                plan: StealthPlan::new(&fingerprint),
+                cookies: profile.cookies.clone(),
+                proxy,
+            })
+        }
 
     /// Opens the window.
     ///
     /// # Errors
     ///
     /// What Tauri reports when it cannot build the window.
-    pub fn open<R: Runtime, M: Manager<R>>(self, manager: &M) -> Result<(), String> {
-        WebviewWindowBuilder::new(manager, self.label, WebviewUrl::External(self.url))
-            .title(self.title)
-            .incognito(true)
-            .stealth_script(&self.plan)
-            .build()
-            .map(|_| ())
-            .map_err(|e| format!("Could not open the window: {e}"))
-    }
+    pub fn open<R, M>(self, manager: &M) -> Result<(), String>
+        where
+            R: Runtime,
+            R::WebviewDispatcher: AsCefWebviewDispatcher,
+            M: Manager<R>,
+        {
+            let Self {
+                label,
+                title,
+                url,
+                plan,
+                cookies,
+                proxy,
+            } = self;
+            // The window opens at a blank page and goes to `url` only after the
+            // plan is in: the overrides apply from the next request on.
+            let mut builder =
+                WebviewWindowBuilder::new(manager, &label, WebviewUrl::External(start_url(None)?))
+                    .title(title)
+                    .incognito(true)
+                    .data_store_identifier(data_store_id(&label))
+                    .stealth_script(&plan);
+            if let Some(proxy) = proxy {
+                builder = builder.proxy_url(proxy.0);
+            }
+            let window = builder
+                .build()
+                .map_err(|e| format!("Could not open the window: {e}"))?;
+            let channel = connect(&window)?;
+            tauri::async_runtime::spawn(async move {
+                // A window the plan could not reach stays off the site: it would
+                // show the real browser.
+                if let Err(e) = prepare(&channel, &plan, &cookies).await {
+                    error!(window = %label, error = %e, "could not apply the profile's stealth: closing the window");
+                    let _ = window.destroy();
+                } else if url.as_str() != BLANK
+                    && let Err(e) = window.navigate(url)
+                {
+                    error!(window = %label, error = %e, "could not go to the page");
+                }
+            });
+            Ok(())
+        }
 }
 
 /// The page to open: an `http` or `https` address, or `about:blank`.

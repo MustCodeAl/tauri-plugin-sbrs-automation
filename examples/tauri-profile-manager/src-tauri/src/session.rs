@@ -259,7 +259,7 @@ async fn set_webdriver_cookies(sb: &mut BaseCase, cookies: &[BrowserCookie]) -> 
 
 /// A cookie as `Network.setCookies` takes it. Absent values are left out
 /// rather than sent empty, which the protocol rejects.
-fn cookie_params(cookie: &BrowserCookie) -> Value {
+pub(crate) fn cookie_params(cookie: &BrowserCookie) -> Value {
     let mut params = json!({
         "name": cookie.name,
         "value": cookie.value,

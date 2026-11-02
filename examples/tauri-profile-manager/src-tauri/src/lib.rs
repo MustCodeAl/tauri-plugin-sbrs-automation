@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use seleniumbase_rs::init_tracing;
 use tauri::{AppHandle, Manager, Runtime, State, command, generate_context, generate_handler};
+use tauri_runtime_cef::AsCefWebviewDispatcher;
 use tracing::{error, info};
 
 mod api;
@@ -122,12 +123,13 @@ async fn launch_profile(
 /// Opens a profile in a window of the app itself, with its fingerprint's
 /// script in every page, through the plugin's stealth (see [`app_window`]).
 #[command]
-async fn open_profile_window<R: Runtime>(
-    app: AppHandle<R>,
-    state: State<'_, Arc<AppState>>,
-    id: String,
-    url: Option<String>,
-) -> Result<(), String> {
+async fn open_profile_window<R: Runtime>(app: AppHandle<R>,
+state: State<'_, Arc<AppState>>,
+id: String,
+url: Option<String>,) -> Result<(), String>
+where
+    R::WebviewDispatcher: AsCefWebviewDispatcher,
+{
     let profile = state
         .profiles
         .lock()
@@ -228,7 +230,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         // Tauri 3 runs no runtime unless the app names one; without this the
         // app stops at once with `RuntimeNotConfigured`.
-        .runtime(tauri_runtime_wry::Wry::default())
+        .runtime(tauri_runtime_cef::Cef::default())
         .plugin(tauri_plugin_opener::init());
     // A WebDriver endpoint for the window, for `tests/e2e_automation.rs`.
     #[cfg(feature = "e2e")]
