@@ -23,19 +23,19 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ring::digest::{digest, SHA256};
+use ring::digest::{SHA256, digest};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{info, warn};
 
-use seleniumbase_rs::storage::ProfileVault;
 use seleniumbase_rs::SeleniumBaseError;
+use seleniumbase_rs::storage::ProfileVault;
 
 use crate::models::{Folder, Profile, StorageStatus, Tag};
 use crate::passphrase::{
-    hex, passphrase_from_env, resolve_passphrase, KeyringSecretStore, PassphraseError,
-    PassphraseSource, SecretStore,
+    KeyringSecretStore, PassphraseError, PassphraseSource, SecretStore, hex, passphrase_from_env,
+    resolve_passphrase,
 };
 
 /// The vault file inside the app-data directory.

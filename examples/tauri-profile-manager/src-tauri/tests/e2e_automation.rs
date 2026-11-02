@@ -137,7 +137,7 @@ impl App {
         loop {
             match self.child.try_wait() {
                 Ok(Some(status)) => {
-                    return Err(format!("the app exited before it was ready: {status}"))
+                    return Err(format!("the app exited before it was ready: {status}"));
                 }
                 Ok(None) => {}
                 Err(error) => return Err(format!("cannot watch the app: {error}")),

@@ -6,13 +6,13 @@ use std::sync::Arc;
 use actix_cors::Cors;
 use actix_web::body::{BoxBody, MessageBody};
 use actix_web::dev::{ServiceRequest, ServiceResponse};
-use actix_web::middleware::{from_fn, Next};
+use actix_web::middleware::{Next, from_fn};
 use actix_web::{
-    delete, get, http::header, http::StatusCode, post, web, App, HttpResponse, HttpServer,
-    ResponseError,
+    App, HttpResponse, HttpServer, ResponseError, delete, get, http::StatusCode, http::header,
+    post, web,
 };
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
@@ -20,7 +20,7 @@ use seleniumbase_rs::profile_payloads::ProfileParams;
 
 use crate::models::*;
 use crate::session::{LaunchError, Session};
-use crate::store::{make_session_id, AppState, PersistError};
+use crate::store::{AppState, PersistError, make_session_id};
 
 #[derive(Debug)]
 pub struct ApiErrorResponse {
@@ -400,15 +400,15 @@ async fn profile_update(
             }
         }
     }
-    if let Some(v) = payload.get("browser").and_then(|v| v.as_str()) {
-        if let Ok(browser) = serde_json::from_value::<seleniumbase_rs::Browser>(json!(v)) {
-            profile.browser = browser;
-        }
+    if let Some(v) = payload.get("browser").and_then(|v| v.as_str())
+        && let Ok(browser) = serde_json::from_value::<seleniumbase_rs::Browser>(json!(v))
+    {
+        profile.browser = browser;
     }
-    if let Some(v) = payload.get("mode").and_then(|v| v.as_str()) {
-        if let Ok(mode) = serde_json::from_value::<seleniumbase_rs::DriverMode>(json!(v)) {
-            profile.mode = mode;
-        }
+    if let Some(v) = payload.get("mode").and_then(|v| v.as_str())
+        && let Ok(mode) = serde_json::from_value::<seleniumbase_rs::DriverMode>(json!(v))
+    {
+        profile.mode = mode;
     }
     if let Some(v) = payload.get("folder_id").and_then(|v| v.as_str()) {
         profile.folder_id = v.to_owned();
@@ -1080,7 +1080,7 @@ async fn twofa_enable() -> ApiResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_web::{http::StatusCode, test, App};
+    use actix_web::{App, http::StatusCode, test};
 
     fn test_state() -> web::Data<Arc<AppState>> {
         web::Data::new(Arc::new(AppState::new()))
@@ -1217,10 +1217,11 @@ mod tests {
             !res.status().is_success(),
             "a foreign origin's preflight was accepted"
         );
-        assert!(res
-            .headers()
-            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
-            .is_none());
+        assert!(
+            res.headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none()
+        );
     }
 
     #[actix_web::test]
@@ -1465,12 +1466,14 @@ mod tests {
         assert_eq!(renamed.cookies.len(), 1);
         assert_eq!(renamed.cookies[0].value, FAKE_COOKIE);
         assert!(restarted.tags.lock().await.iter().any(|t| t.name == "Work"));
-        assert!(restarted
-            .folders
-            .lock()
-            .await
-            .iter()
-            .any(|f| f.name == "Clients"));
+        assert!(
+            restarted
+                .folders
+                .lock()
+                .await
+                .iter()
+                .any(|f| f.name == "Clients")
+        );
     }
 
     #[actix_web::test]
@@ -1550,12 +1553,14 @@ mod tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert!(state
-            .profiles
-            .lock()
-            .await
-            .iter()
-            .any(|p| p.id == "imported-1"));
+        assert!(
+            state
+                .profiles
+                .lock()
+                .await
+                .iter()
+                .any(|p| p.id == "imported-1")
+        );
     }
 
     #[actix_web::test]

@@ -10,7 +10,7 @@ use crate::models::{
     Engine, Folder, Profile, RandomizeRequest, Randomized, SessionInfo, StorageStatus, Tag,
 };
 use crate::session::Session;
-use crate::storage::{ensure_default_folder, Opened, ProfileStorage, StorageError, StorageState};
+use crate::storage::{Opened, ProfileStorage, StorageError, StorageState, ensure_default_folder};
 
 pub struct AppState {
     pub profiles: Mutex<Vec<Profile>>,
@@ -381,7 +381,7 @@ mod tests {
     use super::*;
     use crate::models::NewProfile;
     use crate::passphrase::memory::MemorySecretStore;
-    use crate::storage::{open_storage, LoadedData};
+    use crate::storage::{LoadedData, open_storage};
 
     const FAKE_PASSPHRASE: &str = "fake-passphrase-for-tests";
 
@@ -549,10 +549,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = vault_state(dir.path()).await;
 
-        assert!(!state
-            .update_profile(new_profile("ghost", "Ghost"))
-            .await
-            .unwrap());
+        assert!(
+            !state
+                .update_profile(new_profile("ghost", "Ghost"))
+                .await
+                .unwrap()
+        );
         assert!(!state.delete_profile("ghost").await.unwrap());
         assert!(!state.delete_tag("ghost").await.unwrap());
         assert!(!state.delete_folder("ghost").await.unwrap());

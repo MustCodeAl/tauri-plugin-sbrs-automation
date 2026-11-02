@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use seleniumbase_rs::init_tracing;
-use tauri::{command, generate_context, generate_handler, AppHandle, Manager, Runtime, State};
+use tauri::{AppHandle, Manager, Runtime, State, command, generate_context, generate_handler};
 use tracing::{error, info};
 
 mod api;
@@ -17,7 +17,7 @@ use app_window::ProfileWindow;
 use models::{NewProfile, Profile, RandomizeRequest, Randomized, SessionInfo, StorageStatus};
 use seleniumbase_rs::OsType;
 use session::Session;
-use store::{next_api_port, AppState};
+use store::{AppState, next_api_port};
 
 /// Whether the profile vault opened, for the window to explain when it did not.
 #[command]

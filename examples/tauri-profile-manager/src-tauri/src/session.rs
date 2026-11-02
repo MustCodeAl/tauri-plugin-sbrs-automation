@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use seleniumbase_rs::sb_cdp::{
     Browser as CdpBrowser, BrowserContext, ContextOptions, Cookie, LaunchOptions, Page, Proxy,
