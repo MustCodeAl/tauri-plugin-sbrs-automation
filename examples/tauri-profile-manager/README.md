@@ -53,7 +53,7 @@ The claimed Chrome version comes from a short window of recent releases. Pair it
 
 ## Open in an app window
 
-`Open in app` on a profile card opens the profile in a new window of the app: the system webview (WKWebView on macOS, WebView2 on Windows, WebKitGTK on Linux), not Chrome, with no container and no WebDriver. It goes to the card's start URL, or `about:blank` without one; only `http` and `https` pages open.
+`Open in app` on a profile card opens the profile in a new window of the app. The app runs on CEF (`tauri-runtime-cef`) on macOS, Windows and Linux, so the window is Chromium with a DevTools channel inside the app's process: no container, no WebDriver, no debugging port. It goes to the card's start URL, or `about:blank` without one; only `http` and `https` pages open.
 
 The window carries the profile's fingerprint (its own, else its imported profile's), through the plugin's stealth:
 
@@ -71,8 +71,8 @@ WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
 What the window gets, and what it does not:
 
 - **The fingerprint's init script**, in every document and frame, before the page's own scripts, so what they read (`navigator`, `screen` and the rest) is the fingerprint's. Every runtime takes it.
-- **Not the protocol overrides** (the user agent and Client Hints the network sees, locale, time zone, geolocation): they need the webview's DevTools channel. WKWebView and WebKitGTK have none; WebView2 has one, which the plugin bridges (`stealth::webview2`), but this example does not wire it up. A Pure CDP launch applies both parts.
-- **No proxy and no cookies** from the profile. Each window is new and incognito: it starts from the profile's current fingerprint, shares no storage with the app's own window or another profile's, and keeps nothing on disk once closed.
+- **The protocol overrides** (user agent and Client Hints, locale, time zone, geolocation, screen), sent over the window's CEF DevTools channel with the plugin's `stealth::cef::channel`, then the profile's **cookies** (`Network.setCookies`). The window opens at `about:blank` and goes to the page only after both are in; a window they cannot reach is closed instead.
+- **The profile's proxy** (`http`, `https` or `socks5`) and a **CEF profile of its own** (`data_store_identifier`), so windows share no storage with each other or the app's window. A proxy password is not answered.
 - **No access to the app.** No capability names a profile window, so the site in it cannot call the app's commands.
 
 A profile without a fingerprint is refused: `Randomize` gives it one.

@@ -123,10 +123,12 @@ async fn launch_profile(
 /// Opens a profile in a window of the app itself, with its fingerprint's
 /// script in every page, through the plugin's stealth (see [`app_window`]).
 #[command]
-async fn open_profile_window<R: Runtime>(app: AppHandle<R>,
-state: State<'_, Arc<AppState>>,
-id: String,
-url: Option<String>,) -> Result<(), String>
+async fn open_profile_window<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, Arc<AppState>>,
+    id: String,
+    url: Option<String>,
+) -> Result<(), String>
 where
     R::WebviewDispatcher: AsCefWebviewDispatcher,
 {
