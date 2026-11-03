@@ -24,7 +24,8 @@ everywhere.
 > OS-level input, so the mouse and keyboard are never used.
 >
 > **Verified on a real app** (2026-10-15, macOS, Tauri `3.0.0-alpha.4` with
-> the wry runtime): the `tauri-profile-manager` example of seleniumbase-rs is
+> the wry runtime): the `tauri-profile-manager` example (then in
+> seleniumbase-rs, now [in this repository](examples/tauri-profile-manager)) is
 > driven by `BaseCase` (thirtyfour 0.37) in an end-to-end test that starts a
 > session, reads the title, finds elements by CSS selector, waits for them to
 > be displayed and enabled, clicks, clears and types into inputs, reads and
@@ -289,6 +290,11 @@ there. The `cdp` feature's debugging port and launch flags
 (`CdpStealthConfig::stealth_args`) stay opt-in, gated and for tests only; the
 `stealth` feature uses neither.
 
+The [profile manager example](examples/tauri-profile-manager#open-in-an-app-window)
+uses the init script on the wry runtime: `Open in app` opens a profile in a
+new, incognito window of the app with `.stealth_script(&plan)` for the
+profile's fingerprint (`src-tauri/src/app_window.rs`).
+
 > [!NOTE]
 > **Not run on a real app.** The bridges are tested in Rust against fake CEF
 > and WebView2 channels (ids, results, errors, events, ordering, a navigation
@@ -328,8 +334,7 @@ Any WebDriver client works the same way with `http://127.0.0.1:4445/secret/`
 as its server URL. A new session waits until the app's window has loaded its
 page, so a test can start one as soon as the endpoint answers
 `GET /secret/status`. For a test that starts the app itself, see
-`examples/tauri-profile-manager/src-tauri/tests/e2e_automation.rs` in
-seleniumbase-rs.
+[`examples/tauri-profile-manager/src-tauri/tests/e2e_automation.rs`](examples/tauri-profile-manager/src-tauri/tests/e2e_automation.rs).
 
 | Setting | Default |
 |---|---|

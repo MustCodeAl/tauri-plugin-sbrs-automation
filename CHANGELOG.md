@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- The Tauri profile manager example moves here from seleniumbase-rs, as
+  `examples/tauri-profile-manager` (its own manifest and lock, not part of the
+  plugin's build). It takes the plugin by path with the `stealth` feature and
+  seleniumbase-rs at the plugin's `v0.7.0` tag (`tests/manifest.rs` checks the
+  two tags agree). New in it: `Open in app` opens a profile in a new, incognito
+  window of the app whose webview runs the profile's fingerprint script
+  (`stealth::StealthScriptExt`); the protocol overrides are not applied there
+  (WKWebView and WebKitGTK have no DevTools channel, and the WebView2 bridge is
+  not wired up). Its `e2e` feature still registers `init()` for the
+  end-to-end test. The example then moved to edition 2024 and the CEF runtime
+  on every desktop (Tauri `3.0.0-alpha.5`, `tauri-runtime-cef`
+  `3.0.0-alpha.6`): its app window now gets the plan's overrides over
+  `stealth::cef::channel`, the profile's cookies and proxy, and a CEF profile
+  of its own. The plugin's Tauri pin moved to `3.0.0-alpha.5`.
+
 - Add the optional `stealth` feature: seleniumbase-rs's fingerprint stealth in
   the app's own webviews, for a shipped app. `stealth::StealthScriptExt`
   adds a `StealthPlan`'s init script to a `WebviewWindowBuilder` for every
