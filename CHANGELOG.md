@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The example's app window is a small browser: a toolbar webview above the
+  page with Back, Forward, Reload/Stop and an address bar, which moves the page
+  over its DevTools channel. `Open in app` on a profile with no fingerprint
+  draws one for this machine's system and saves it, instead of refusing; a
+  failed `Open in app` or `Launch` is now logged. The example turns on Tauri's
+  `unstable` feature for the multi-webview window.
+
 - The example's app window answers its proxy's password prompts: the address
   goes to CEF without the login, and the window answers `Fetch.authRequired`
   from the proxy over its DevTools channel (a website's prompt gets the

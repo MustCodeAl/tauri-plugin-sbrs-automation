@@ -28,7 +28,7 @@ e2e = []
 tauri-build = { version = "=3.0.0-alpha.4", features = [] }
 
 [dependencies]
-tauri = { version = "=3.0.0-alpha.5", features = [] }
+tauri = { version = "=3.0.0-alpha.5", features = ["unstable"] }
 # Tauri 3 no longer picks a runtime itself: the app names one (see `run`). CEF
 # (Chromium) runs on macOS, Windows and Linux, and its in-process DevTools
 # channel lets a profile's window take the whole `StealthPlan`.

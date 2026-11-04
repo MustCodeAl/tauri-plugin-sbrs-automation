@@ -90,6 +90,9 @@ async fn launch_profile(
 
     let session = Session::launch(&profile, start_url.as_deref())
         .await
+        .inspect_err(
+            |e| tracing::warn!(profile_id = %id, error = %e, "could not launch the profile"),
+        )
         .map_err(|e| e.to_string())?;
 
     let session_id = store::make_session_id();
@@ -140,9 +143,33 @@ where
         .find(|p| p.id == id)
         .cloned()
         .ok_or_else(|| "Profile not found".to_string())?;
-    let window = ProfileWindow::plan(&profile, url.as_deref())?;
+    // A profile with no fingerprint gets one drawn for this machine's
+    // system and saved first, as `Randomize` does, so the window never shows
+    // the real browser and the profile keeps the same identity next time.
+    let profile = if store::build_config(&profile).fingerprint.is_some() {
+        profile
+    } else {
+        let randomized = state
+            .randomize_fingerprint(
+                &id,
+                RandomizeRequest {
+                    os: None,
+                    seed: None,
+                },
+            )
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Profile not found".to_string())?;
+        info!(profile_id = %id, os = ?randomized.os, "drew a fingerprint for the app window");
+        randomized.profile
+    };
+    let window = ProfileWindow::plan(&profile, url.as_deref()).inspect_err(
+        |e| tracing::warn!(profile_id = %id, error = %e, "could not open the profile in an app window"),
+    )?;
     let label = window.label.clone();
-    window.open(&app)?;
+    window.open(&app).inspect_err(
+        |e| tracing::warn!(profile_id = %id, error = %e, "could not open the profile in an app window"),
+    )?;
     info!(profile_id = %profile.id, window = %label, "opened profile in an app window");
     Ok(())
 }
@@ -215,6 +242,18 @@ async fn get_api_base() -> Result<String, String> {
     Ok(format!("http://127.0.0.1:{}", next_api_port()))
 }
 
+/// A button or the address bar of a profile window's toolbar. The caller's
+/// own label says which window it belongs to, so only a toolbar can use it.
+#[command]
+async fn control_profile_window<R: Runtime>(
+    webview: tauri::Webview<R>,
+    windows: State<'_, app_window::OpenWindows>,
+    action: Option<app_window::PageAction>,
+    address: Option<String>,
+) -> Result<(), String> {
+    app_window::control(&windows, webview.label(), action, address.as_deref()).await
+}
+
 /// Hands this run's API token to the app window.
 ///
 /// Reaching the token requires Tauri IPC, which is available only to the
@@ -233,7 +272,8 @@ pub fn run() {
         // Tauri 3 runs no runtime unless the app names one; without this the
         // app stops at once with `RuntimeNotConfigured`.
         .runtime(tauri_runtime_cef::Cef::default())
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .manage(app_window::OpenWindows::default());
     // A WebDriver endpoint for the window, for `tests/e2e_automation.rs`.
     #[cfg(feature = "e2e")]
     let builder = builder.plugin(tauri_plugin_sbrs_automation::init());
@@ -266,6 +306,7 @@ pub fn run() {
             randomize_fingerprint,
             launch_profile,
             open_profile_window,
+            control_profile_window,
             list_sessions,
             navigate_session,
             take_screenshot,

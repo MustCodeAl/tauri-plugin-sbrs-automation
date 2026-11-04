@@ -1,0 +1,9 @@
+# What the browsers a profile launches write next to the app (downloads,
+# drivers, logs, recordings). `tauri dev` must not rebuild and restart the app
+# when they change.
+downloaded_files/
+downloaded_drivers/
+latest_logs/
+archived_logs/
+recordings/
+saved_cookies/

@@ -74,8 +74,9 @@ What the window gets, and what it does not:
 - **The protocol overrides** (user agent and Client Hints, locale, time zone, geolocation, screen), sent over the window's CEF DevTools channel with the plugin's `stealth::cef::channel`, then the profile's **cookies** (`Network.setCookies`). The window opens at `about:blank` and goes to the page only after both are in; a window they cannot reach is closed instead.
 - **The profile's proxy** (`http`, `https` or `socks5`) and a **CEF profile of its own** (`data_store_identifier`), so windows share no storage with each other or the app's window. The proxy's address goes to the webview without its user name and password (CEF ignores a login there); the window answers the proxy's password prompts itself over the same DevTools channel (`Fetch.authRequired`), once per request, and gives a website's own prompt the browser's default, never the proxy's account. The login stays out of the window's `Debug` output and the logs.
 - **No access to the app.** No capability names a profile window, so the site in it cannot call the app's commands.
+- **A toolbar**: Back, Forward, Reload (Stop while a page loads) and an address bar (`example.com` goes to `https://example.com`), with ⌘[, ⌘], ⌘R and ⌘L while the toolbar has focus. It is a second webview above the page (Tauri's `unstable` multi-webview API): the page never sees it, and it moves the page over the page's DevTools channel (`Page.navigate`, `Page.navigateToHistoryEntry`, `Page.reload`, `Page.stopLoading`), not with page scripts. Only the toolbar's label (`capabilities/toolbar.json`) may listen for the page's loads.
 
-A profile without a fingerprint is refused: `Randomize` gives it one.
+A profile without a fingerprint gets one first, drawn for this machine's system and saved to the profile, as `Randomize` does; the window never shows the real browser.
 
 ## Profile storage
 
@@ -119,8 +120,9 @@ VNC password is `secret` by default.
 
 Needs Rust 1.99 or newer, the version `seleniumbase-rs` requires (Tauri 3
 needs 1.95), and Node LTS (`brew install node`, `winget install
-OpenJS.NodeJS.LTS`). On Windows it uses WebView2, which comes with Windows 10
-and 11. On Debian and Ubuntu:
+OpenJS.NodeJS.LTS`). The app runs on CEF (`tauri-runtime-cef`) on every
+desktop, not on the system webview: the first build needs CMake and Ninja and
+downloads CEF (about 1 GB). Tauri's own packages on Debian and Ubuntu:
 
 ```bash
 sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libssl-dev libx11-dev libxdo-dev

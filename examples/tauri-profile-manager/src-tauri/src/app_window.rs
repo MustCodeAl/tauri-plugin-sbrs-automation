@@ -22,13 +22,19 @@ use std::sync::{Mutex, PoisonError};
 
 use seleniumbase_rs::sb_cdp::Proxy;
 
-use tauri::{Manager, Runtime, Url, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_sbrs_automation::stealth::{StealthPlan, StealthScriptExt};
+use tauri::webview::{PageLoadEvent, WebviewBuilder};
+use tauri::window::WindowBuilder;
+use tauri::{
+    Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Runtime, Url,
+    WebviewUrl, WindowEvent,
+};
+use tauri_plugin_sbrs_automation::stealth::StealthPlan;
 
 use crate::models::Profile;
 use crate::store::build_config;
 use serde_json::{Value, json};
-use tauri::WebviewWindow;
+use std::collections::HashMap;
+use tauri::Webview;
 use tauri_plugin_sbrs_automation::stealth::{DevToolsChannel, SeleniumBaseError, cef};
 use tauri_runtime_cef::{
     AsCefWebviewDispatcher, DevToolsProtocol, WebviewCefExt, allocate_devtools_message_id,
@@ -75,7 +81,7 @@ fn data_store_id(label: &str) -> [u8; 16] {
 
 /// Joins the window's CEF DevTools channel to the plugin's bridge. The
 /// observer only hands answers on, so it never blocks CEF's UI thread.
-fn connect<R>(window: &WebviewWindow<R>, login: Option<Proxy>) -> Result<DevToolsChannel, String>
+fn connect<R>(window: &Webview<R>, login: Option<Proxy>) -> Result<DevToolsChannel, String>
 where
     R: Runtime,
     R::WebviewDispatcher: AsCefWebviewDispatcher,
@@ -112,7 +118,7 @@ where
 /// only sends and never waits; the result comes back with an id the plugin's
 /// observer did not allocate, which it ignores.
 fn answer_fetch<R>(
-    window: &WebviewWindow<R>,
+    window: &Webview<R>,
     method: &str,
     params: &[u8],
     login: &Proxy,
@@ -290,22 +296,52 @@ impl ProfileWindow {
             proxy,
             proxy_login,
         } = self;
-        // The window opens at a blank page and goes to `url` only after the
+        let failed = |e: tauri::Error| format!("Could not open the window: {e}");
+        let window = WindowBuilder::new(manager, &label)
+            .title(title)
+            .inner_size(WIDTH, HEIGHT)
+            .min_inner_size(MIN_WIDTH, TOOLBAR_HEIGHT * 3.0)
+            .build()
+            .map_err(failed)?;
+        // The toolbar is an app page: only it, never the site, can ask the
+        // app for anything (`capabilities/toolbar.json`).
+        let toolbar = window
+            .add_child(
+                WebviewBuilder::new(
+                    toolbar_label(&label),
+                    WebviewUrl::App("toolbar.html".into()),
+                )
+                .position(LogicalPosition::new(0.0, 0.0))
+                .size(LogicalSize::new(WIDTH, TOOLBAR_HEIGHT)),
+            )
+            .map_err(failed)?;
+        // The page opens at a blank page and goes to `url` only after the
         // plan is in: the overrides apply from the next request on.
-        let mut builder =
-            WebviewWindowBuilder::new(manager, &label, WebviewUrl::External(start_url(None)?))
-                .title(title)
+        let reports_to = toolbar.label().to_owned();
+        let mut page =
+            WebviewBuilder::new(page_label(&label), WebviewUrl::External(start_url(None)?))
+                .position(LogicalPosition::new(0.0, TOOLBAR_HEIGHT))
+                .size(LogicalSize::new(WIDTH, HEIGHT - TOOLBAR_HEIGHT))
                 .incognito(true)
                 .data_store_identifier(data_store_id(&label))
-                .stealth_script(&plan);
+                .initialization_script_for_all_frames(plan.init_script())
+                .on_page_load(move |page, payload| {
+                    let report = json!({
+                        "url": payload.url().as_str(),
+                        "loading": matches!(payload.event(), PageLoadEvent::Started),
+                    });
+                    let _ = page.emit_to(reports_to.as_str(), PAGE_EVENT, report);
+                });
         if let Some(proxy) = proxy {
-            builder = builder.proxy_url(proxy.0);
+            page = page.proxy_url(proxy.0);
         }
-        let window = builder
-            .build()
-            .map_err(|e| format!("Could not open the window: {e}"))?;
+        let page = window.add_child(page).map_err(failed)?;
+        lay_out(&window, &toolbar, &page, manager.app_handle().clone());
         let answers_proxy = proxy_login.is_some();
-        let channel = connect(&window, proxy_login)?;
+        let channel = connect(&page, proxy_login)?;
+        manager
+            .state::<OpenWindows>()
+            .insert(&label, channel.clone());
         tauri::async_runtime::spawn(async move {
             // A window the plan could not reach stays off the site: it would
             // show the real browser.
@@ -313,12 +349,172 @@ impl ProfileWindow {
                 error!(window = %label, error = %e, "could not apply the profile's stealth: closing the window");
                 let _ = window.destroy();
             } else if url.as_str() != BLANK
-                && let Err(e) = window.navigate(url)
+                && let Err(e) = page.navigate(url)
             {
                 error!(window = %label, error = %e, "could not go to the page");
             }
         });
         Ok(())
+    }
+}
+
+/// The window's first size, in logical pixels.
+const WIDTH: f64 = 1280.0;
+const HEIGHT: f64 = 820.0;
+const MIN_WIDTH: f64 = 480.0;
+/// The height of the toolbar above the page, in logical pixels.
+const TOOLBAR_HEIGHT: f64 = 44.0;
+/// The event the page's loads are reported to its toolbar with.
+const PAGE_EVENT: &str = "profile-page";
+
+/// The label of a window's toolbar webview.
+fn toolbar_label(window: &str) -> String {
+    format!("{window}-toolbar")
+}
+
+/// The label of a window's page webview.
+fn page_label(window: &str) -> String {
+    format!("{window}-page")
+}
+
+/// Keeps the toolbar at the top and the page under it as the window is
+/// resized, and forgets the window's channel when it closes.
+fn lay_out<R: Runtime>(
+    window: &tauri::Window<R>,
+    toolbar: &Webview<R>,
+    page: &Webview<R>,
+    app: tauri::AppHandle<R>,
+) {
+    let (sized, toolbar, page) = (window.clone(), toolbar.clone(), page.clone());
+    let label = window.label().to_owned();
+    window.on_window_event(move |event| match event {
+        WindowEvent::Resized(size) => {
+            let scale = sized.scale_factor().unwrap_or(1.0);
+            let bar = (TOOLBAR_HEIGHT * scale).round() as u32;
+            let _ = toolbar.set_position(PhysicalPosition::new(0, 0));
+            let _ = toolbar.set_size(PhysicalSize::new(size.width, bar));
+            let _ = page.set_position(PhysicalPosition::new(0, bar));
+            let _ = page.set_size(PhysicalSize::new(
+                size.width,
+                size.height.saturating_sub(bar),
+            ));
+        }
+        WindowEvent::Destroyed => app.state::<OpenWindows>().remove(&label),
+        _ => {}
+    });
+}
+
+/// The DevTools channel of every open profile window's page, by window label,
+/// for its toolbar.
+#[derive(Debug, Default)]
+pub struct OpenWindows(Mutex<HashMap<String, DevToolsChannel>>);
+
+impl OpenWindows {
+    fn insert(&self, window: &str, channel: DevToolsChannel) {
+        self.lock().insert(window.to_owned(), channel);
+    }
+
+    fn remove(&self, window: &str) {
+        self.lock().remove(window);
+    }
+
+    /// The page channel of the window whose toolbar is `toolbar`, or `None`
+    /// when `toolbar` is not a profile window's toolbar.
+    fn for_toolbar(&self, toolbar: &str) -> Option<DevToolsChannel> {
+        let window = toolbar.strip_suffix("-toolbar")?;
+        self.lock().get(window).cloned()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, DevToolsChannel>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// A toolbar button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PageAction {
+    Back,
+    Forward,
+    Reload,
+    Stop,
+}
+
+/// Does what the toolbar `toolbar` asked of its page: a button, or going to
+/// what was typed in the address bar. It goes over the page's DevTools
+/// channel, so the page cannot tell a person from the toolbar.
+///
+/// # Errors
+///
+/// When `toolbar` is not a profile window's toolbar, the address is not a web
+/// address, or the page did not answer.
+pub async fn control(
+    windows: &OpenWindows,
+    toolbar: &str,
+    action: Option<PageAction>,
+    typed: Option<&str>,
+) -> Result<(), String> {
+    let channel = windows
+        .for_toolbar(toolbar)
+        .ok_or_else(|| format!("{toolbar} is not the toolbar of an open profile window"))?;
+    let browser = channel.browser();
+    let sent = match (action, typed) {
+        (_, Some(typed)) => {
+            let url = address(typed)?;
+            browser
+                .execute("Page.navigate", json!({ "url": url.as_str() }))
+                .await
+        }
+        (Some(PageAction::Reload), None) => browser.execute("Page.reload", json!({})).await,
+        (Some(PageAction::Stop), None) => browser.execute("Page.stopLoading", json!({})).await,
+        (Some(step), None) => {
+            let history = browser
+                .execute("Page.getNavigationHistory", json!({}))
+                .await;
+            match history.map(|history| history_step(&history, step)) {
+                Ok(Some(entry)) => {
+                    browser
+                        .execute("Page.navigateToHistoryEntry", json!({ "entryId": entry }))
+                        .await
+                }
+                Ok(None) => return Ok(()),
+                Err(e) => Err(e),
+            }
+        }
+        (None, None) => return Ok(()),
+    };
+    sent.map(drop).map_err(|e| e.to_string())
+}
+
+/// The id of the history entry one step back or forward of the current one,
+/// from `Page.getNavigationHistory`'s answer; `None` at either end.
+fn history_step(history: &Value, step: PageAction) -> Option<i64> {
+    let current = history["currentIndex"].as_i64()?;
+    let index = match step {
+        PageAction::Back => current.checked_sub(1)?,
+        PageAction::Forward => current.checked_add(1)?,
+        PageAction::Reload | PageAction::Stop => return None,
+    };
+    history["entries"].get(usize::try_from(index).ok()?)?["id"].as_i64()
+}
+
+/// What the address bar goes to: an `http` or `https` address, with
+/// `https://` added when none is typed.
+fn address(typed: &str) -> Result<Url, String> {
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return Err("Type an address".into());
+    }
+    let full = if typed.contains("://") {
+        typed.to_owned()
+    } else {
+        format!("https://{typed}")
+    };
+    let url = Url::parse(&full).map_err(|e| format!("Not a web address: {typed} ({e})"))?;
+    if matches!(url.scheme(), "http" | "https") {
+        Ok(url)
+    } else {
+        Err(format!("Only http and https pages open here, not {typed}"))
     }
 }
 
@@ -458,6 +654,51 @@ mod tests {
     fn each_label_gets_a_data_store_of_its_own_and_the_same_one_every_time() {
         assert_eq!(data_store_id("profile-a-0"), data_store_id("profile-a-0"));
         assert_ne!(data_store_id("profile-a-0"), data_store_id("profile-a-1"));
+    }
+
+    #[test]
+    fn back_and_forward_step_through_the_history() {
+        let history = json!({
+            "currentIndex": 1,
+            "entries": [{ "id": 10 }, { "id": 11 }, { "id": 12 }],
+        });
+        assert_eq!(history_step(&history, PageAction::Back), Some(10));
+        assert_eq!(history_step(&history, PageAction::Forward), Some(12));
+        let first = json!({ "currentIndex": 0, "entries": [{ "id": 10 }] });
+        assert_eq!(history_step(&first, PageAction::Back), None);
+        assert_eq!(history_step(&first, PageAction::Forward), None);
+        assert_eq!(history_step(&history, PageAction::Reload), None);
+    }
+
+    #[test]
+    fn the_address_bar_takes_web_addresses_only() {
+        assert_eq!(
+            address("example.com").unwrap().as_str(),
+            "https://example.com/"
+        );
+        assert_eq!(
+            address(" http://127.0.0.1:8080/a ").unwrap().as_str(),
+            "http://127.0.0.1:8080/a"
+        );
+        for typed in [
+            "",
+            "  ",
+            "file:///etc/passwd",
+            "javascript://x",
+            "ftp://p.example",
+        ] {
+            assert!(address(typed).is_err(), "{typed:?} was accepted");
+        }
+    }
+
+    #[test]
+    fn a_toolbar_reaches_only_its_own_windows_page() {
+        let windows = OpenWindows::default();
+        assert!(windows.for_toolbar("profile-a-0-toolbar").is_none());
+        assert!(windows.for_toolbar("profile-a-0-page").is_none());
+        assert!(windows.for_toolbar("main").is_none());
+        assert_eq!(toolbar_label("profile-a-0"), "profile-a-0-toolbar");
+        assert_eq!(page_label("profile-a-0"), "profile-a-0-page");
     }
 
     fn masked() -> Profile {

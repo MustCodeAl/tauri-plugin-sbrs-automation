@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Toolbar</title>
+    <link rel="stylesheet" href="toolbar.css" />
+  </head>
+  <body>
+    <nav class="toolbar" aria-label="Page">
+      <button id="back" type="button" title="Back (⌘[)" aria-label="Back">←</button>
+      <button id="forward" type="button" title="Forward (⌘])" aria-label="Forward">→</button>
+      <button id="reload" type="button" title="Reload (⌘R)" aria-label="Reload">↻</button>
+      <form id="go" class="address">
+        <input
+          id="address"
+          type="text"
+          spellcheck="false"
+          autocomplete="off"
+          placeholder="Type an address"
+          aria-label="Address"
+        />
+      </form>
+    </nav>
+    <script src="toolbar.js"></script>
+  </body>
+</html>
