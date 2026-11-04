@@ -72,7 +72,7 @@ What the window gets, and what it does not:
 
 - **The fingerprint's init script**, in every document and frame, before the page's own scripts, so what they read (`navigator`, `screen` and the rest) is the fingerprint's. Every runtime takes it.
 - **The protocol overrides** (user agent and Client Hints, locale, time zone, geolocation, screen), sent over the window's CEF DevTools channel with the plugin's `stealth::cef::channel`, then the profile's **cookies** (`Network.setCookies`). The window opens at `about:blank` and goes to the page only after both are in; a window they cannot reach is closed instead.
-- **The profile's proxy** (`http`, `https` or `socks5`) and a **CEF profile of its own** (`data_store_identifier`), so windows share no storage with each other or the app's window. A proxy password is not answered.
+- **The profile's proxy** (`http`, `https` or `socks5`) and a **CEF profile of its own** (`data_store_identifier`), so windows share no storage with each other or the app's window. The proxy's address goes to the webview without its user name and password (CEF ignores a login there); the window answers the proxy's password prompts itself over the same DevTools channel (`Fetch.authRequired`), once per request, and gives a website's own prompt the browser's default, never the proxy's account. The login stays out of the window's `Debug` output and the logs.
 - **No access to the app.** No capability names a profile window, so the site in it cannot call the app's commands.
 
 A profile without a fingerprint is refused: `Randomize` gives it one.

@@ -5,7 +5,8 @@
 //! init script ([`StealthScriptExt::stealth_script`]) and, over the CEF
 //! DevTools channel (`stealth::cef::channel`), the overrides (user agent and
 //! Client Hints, locale, time zone, screen) and the profile's cookies, before
-//! it goes to the page. It has the profile's proxy and a CEF profile of its
+//! it goes to the page. It has the profile's proxy, whose password prompts it
+//! answers itself over the same channel, and a CEF profile of its
 //! own; a window the plan cannot reach is closed rather than shown to the
 //! site.
 //!
@@ -15,7 +16,11 @@
 //! window. No capability names its label, so the site it shows cannot call the
 //! app.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
+
+use seleniumbase_rs::sb_cdp::Proxy;
 
 use tauri::{Manager, Runtime, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_sbrs_automation::stealth::{StealthPlan, StealthScriptExt};
@@ -37,11 +42,21 @@ use crate::session::cookie_params;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyUrl(pub Url);
 
-/// The profile's proxy as a webview takes it, or `None` when it has none or
+/// The profile's proxy as a webview takes it, with no user name or password in
+/// the address, and the proxy's login when it has one; `None` when it has none or
 /// names something else.
-fn proxy_url(proxy: Option<&str>) -> Option<ProxyUrl> {
-    let url = Url::parse(proxy?.trim()).ok()?;
-    matches!(url.scheme(), "http" | "https" | "socks5").then_some(ProxyUrl(url))
+fn proxy_url(proxy: Option<&str>) -> Option<(ProxyUrl, Option<Proxy>)> {
+    let text = proxy?.trim();
+    let mut url = Url::parse(text).ok()?;
+    if !matches!(url.scheme(), "http" | "https" | "socks5") {
+        return None;
+    }
+    // CEF ignores a login written into the address; the window answers the
+    // proxy's prompts instead, so the address keeps no secret.
+    let login = Proxy::parse(text).ok().filter(Proxy::has_credentials);
+    url.set_username("").ok()?;
+    url.set_password(None).ok()?;
+    Some((ProxyUrl(url), login))
 }
 
 /// The window's own CEF profile: 16 bytes from its label (FNV-1a, twice), so
@@ -60,7 +75,7 @@ fn data_store_id(label: &str) -> [u8; 16] {
 
 /// Joins the window's CEF DevTools channel to the plugin's bridge. The
 /// observer only hands answers on, so it never blocks CEF's UI thread.
-fn connect<R>(window: &WebviewWindow<R>) -> Result<DevToolsChannel, String>
+fn connect<R>(window: &WebviewWindow<R>, login: Option<Proxy>) -> Result<DevToolsChannel, String>
 where
     R: Runtime,
     R::WebviewDispatcher: AsCefWebviewDispatcher,
@@ -70,6 +85,8 @@ where
         move |message| Ok(sender.send_dev_tools_message(message)?),
         || Ok(allocate_devtools_message_id()?),
     );
+    let answerer = window.clone();
+    let answered = Mutex::new(HashSet::new());
     window
         .on_dev_tools_protocol(move |protocol| match protocol {
             DevToolsProtocol::MethodResult {
@@ -77,11 +94,89 @@ where
                 success,
                 result,
             } => observer.method_result(message_id, success, &result),
-            DevToolsProtocol::Event { method, params } => observer.event(&method, &params),
+            // With a proxy login, `Fetch` events are the window's own:
+            // the library never enables that domain here.
+            DevToolsProtocol::Event { method, params } => match &login {
+                Some(login) if method.starts_with("Fetch.") => {
+                    answer_fetch(&answerer, &method, &params, login, &answered);
+                }
+                _ => observer.event(&method, &params),
+            },
             DevToolsProtocol::Message(_) => {}
         })
         .map_err(|e| format!("Could not reach the window's DevTools: {e}"))?;
     Ok(channel)
+}
+
+/// Answers one `Fetch` event of the window. It runs on CEF's UI thread, so it
+/// only sends and never waits; the result comes back with an id the plugin's
+/// observer did not allocate, which it ignores.
+fn answer_fetch<R>(
+    window: &WebviewWindow<R>,
+    method: &str,
+    params: &[u8],
+    login: &Proxy,
+    answered: &Mutex<HashSet<String>>,
+) where
+    R: Runtime,
+    R::WebviewDispatcher: AsCefWebviewDispatcher,
+{
+    let Ok(params) = serde_json::from_slice::<Value>(params) else {
+        return;
+    };
+    let answer = {
+        let mut answered = answered.lock().unwrap_or_else(PoisonError::into_inner);
+        fetch_answer(method, &params, login, &mut answered)
+    };
+    let Some((command, params)) = answer else {
+        return;
+    };
+    let sent = allocate_devtools_message_id()
+        .map_err(|e| e.to_string())
+        .and_then(|id| {
+            let message = json!({ "id": id, "method": command, "params": params });
+            window
+                .send_dev_tools_message(message.to_string().as_bytes())
+                .map_err(|e| e.to_string())
+        });
+    if let Err(e) = sent {
+        warn!(command, error = %e, "could not answer a paused request or a password prompt");
+    }
+}
+
+/// What the window answers a `Fetch` event with, as a command and its
+/// parameters. A paused request goes on unchanged. A password prompt from
+/// the proxy gets `login` once per request; asked again, the login was wrong
+/// and the prompt is cancelled rather than answered in a loop. Any other
+/// prompt (a website's `401`) gets the browser's default and never the
+/// proxy's account.
+fn fetch_answer(
+    method: &str,
+    params: &Value,
+    login: &Proxy,
+    answered: &mut HashSet<String>,
+) -> Option<(&'static str, Value)> {
+    let request_id = params["requestId"].as_str()?.to_owned();
+    match method {
+        "Fetch.requestPaused" => {
+            Some(("Fetch.continueRequest", json!({ "requestId": request_id })))
+        }
+        "Fetch.authRequired" => {
+            let response = if params["authChallenge"]["source"].as_str() != Some("Proxy") {
+                json!({ "response": "Default" })
+            } else if answered.insert(request_id.clone()) {
+                let (username, password) = login.credentials()?;
+                json!({ "response": "ProvideCredentials", "username": username, "password": password })
+            } else {
+                json!({ "response": "CancelAuth" })
+            };
+            Some((
+                "Fetch.continueWithAuth",
+                json!({ "requestId": request_id, "authChallengeResponse": response }),
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// Sends the plan's overrides, then the profile's cookies.
@@ -89,6 +184,7 @@ async fn prepare(
     channel: &DevToolsChannel,
     plan: &StealthPlan,
     cookies: &[BrowserCookie],
+    answers_proxy: bool,
 ) -> Result<(), SeleniumBaseError> {
     channel.apply(plan).await?;
     if !cookies.is_empty() {
@@ -96,6 +192,17 @@ async fn prepare(
         channel
             .browser()
             .execute("Network.setCookies", json!({ "cookies": cookies }))
+            .await?;
+    }
+    if answers_proxy {
+        // Every request pauses and every password prompt is asked of the
+        // window; `answer_fetch` lets them go and answers the proxy's.
+        channel
+            .browser()
+            .execute(
+                "Fetch.enable",
+                json!({ "handleAuthRequests": true, "patterns": [{ "urlPattern": "*" }] }),
+            )
             .await?;
     }
     Ok(())
@@ -122,6 +229,10 @@ pub struct ProfileWindow {
     pub cookies: Vec<BrowserCookie>,
     /// The profile's proxy, when it names one a webview can use.
     pub proxy: Option<ProxyUrl>,
+    /// The proxy's login, when it has one: the window answers the proxy's
+    /// password prompts with it, and with nothing else. Its `Debug` hides the
+    /// password.
+    pub proxy_login: Option<Proxy>,
 }
 
 impl ProfileWindow {
@@ -143,7 +254,8 @@ impl ProfileWindow {
                 profile.name
             )
         })?;
-        let proxy = proxy_url(config.proxy.as_deref());
+        let (proxy, proxy_login) = proxy_url(config.proxy.as_deref()).unzip();
+        let proxy_login = proxy_login.flatten();
         if config.proxy.is_some() && proxy.is_none() {
             warn!(profile_id = %profile.id, "the proxy is not an http or socks5 address: the window opens without it");
         }
@@ -154,6 +266,7 @@ impl ProfileWindow {
             plan: StealthPlan::new(&fingerprint),
             cookies: profile.cookies.clone(),
             proxy,
+            proxy_login,
         })
     }
 
@@ -175,6 +288,7 @@ impl ProfileWindow {
             plan,
             cookies,
             proxy,
+            proxy_login,
         } = self;
         // The window opens at a blank page and goes to `url` only after the
         // plan is in: the overrides apply from the next request on.
@@ -190,11 +304,12 @@ impl ProfileWindow {
         let window = builder
             .build()
             .map_err(|e| format!("Could not open the window: {e}"))?;
-        let channel = connect(&window)?;
+        let answers_proxy = proxy_login.is_some();
+        let channel = connect(&window, proxy_login)?;
         tauri::async_runtime::spawn(async move {
             // A window the plan could not reach stays off the site: it would
             // show the real browser.
-            if let Err(e) = prepare(&channel, &plan, &cookies).await {
+            if let Err(e) = prepare(&channel, &plan, &cookies, answers_proxy).await {
                 error!(window = %label, error = %e, "could not apply the profile's stealth: closing the window");
                 let _ = window.destroy();
             } else if url.as_str() != BLANK
@@ -254,6 +369,89 @@ mod tests {
             assert!(proxy_url(Some(proxy)).is_none(), "{proxy}");
         }
         assert!(proxy_url(None).is_none());
+    }
+
+    /// The login of a fake proxy, as a profile names it.
+    const FAKE_LOGIN: &str = "http://alice:fake-pw-7@proxy.example:8080";
+
+    fn login() -> Proxy {
+        Proxy::parse(FAKE_LOGIN).unwrap()
+    }
+
+    #[test]
+    fn the_proxy_login_stays_out_of_the_address_and_the_debug_output() {
+        let mut profile = masked();
+        profile.proxy = Some(FAKE_LOGIN.into());
+        let window = ProfileWindow::plan(&profile, None).unwrap();
+        let address = &window.proxy.as_ref().unwrap().0;
+        assert_eq!(address.as_str(), "http://proxy.example:8080/");
+        let login = window.proxy_login.as_ref().unwrap();
+        assert_eq!(login.credentials(), Some(("alice", "fake-pw-7")));
+        assert!(!format!("{window:?}").contains("fake-pw-7"));
+    }
+
+    #[test]
+    fn a_proxy_without_a_login_needs_no_answers() {
+        let (_, login) = proxy_url(Some("socks5://127.0.0.1:9050")).unwrap();
+        assert!(login.is_none());
+    }
+
+    #[test]
+    fn the_proxys_prompt_gets_the_login_once() {
+        let mut answered = HashSet::new();
+        let prompt = json!({
+            "requestId": "r1",
+            "authChallenge": { "source": "Proxy", "origin": "http://proxy.example:8080" },
+        });
+        let (method, params) =
+            fetch_answer("Fetch.authRequired", &prompt, &login(), &mut answered).unwrap();
+        assert_eq!(method, "Fetch.continueWithAuth");
+        assert_eq!(params["requestId"], "r1");
+        assert_eq!(
+            params["authChallengeResponse"],
+            json!({ "response": "ProvideCredentials", "username": "alice", "password": "fake-pw-7" })
+        );
+        // The same request asking again means the login was wrong: cancel
+        // rather than answer in a loop.
+        let (_, again) =
+            fetch_answer("Fetch.authRequired", &prompt, &login(), &mut answered).unwrap();
+        assert_eq!(again["authChallengeResponse"]["response"], "CancelAuth");
+    }
+
+    #[test]
+    fn a_websites_prompt_never_gets_the_proxy_login() {
+        let mut answered = HashSet::new();
+        for source in [json!("Server"), Value::Null] {
+            let prompt = json!({
+                "requestId": "r2",
+                "authChallenge": { "source": source, "origin": "https://site.example" },
+            });
+            let (_, params) =
+                fetch_answer("Fetch.authRequired", &prompt, &login(), &mut answered).unwrap();
+            assert_eq!(
+                params["authChallengeResponse"],
+                json!({ "response": "Default" })
+            );
+        }
+    }
+
+    #[test]
+    fn a_paused_request_goes_on_unchanged() {
+        let mut answered = HashSet::new();
+        let paused = json!({ "requestId": "r3", "request": { "url": "https://site.example/" } });
+        assert_eq!(
+            fetch_answer("Fetch.requestPaused", &paused, &login(), &mut answered),
+            Some(("Fetch.continueRequest", json!({ "requestId": "r3" })))
+        );
+        assert_eq!(
+            fetch_answer(
+                "Network.requestWillBeSent",
+                &paused,
+                &login(),
+                &mut answered
+            ),
+            None
+        );
     }
 
     #[test]

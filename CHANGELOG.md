@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The example's app window answers its proxy's password prompts: the address
+  goes to CEF without the login, and the window answers `Fetch.authRequired`
+  from the proxy over its DevTools channel (a website's prompt gets the
+  browser's default). Before, the login stayed in the address, where CEF
+  ignored it and the window's `Debug` output showed it.
+
 - The Tauri profile manager example moves here from seleniumbase-rs, as
   `examples/tauri-profile-manager` (its own manifest and lock, not part of the
   plugin's build). It takes the plugin by path with the `stealth` feature and
