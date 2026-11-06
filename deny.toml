@@ -1,0 +1,46 @@
+# cargo-deny configuration — supply-chain gate for tauri-plugin-sbrs-automation.
+#
+# Modelled on the deny.toml of the core repository (seleniumbase-rs). Run locally with
+# `cargo deny check`. Every exception below has to be written down and reviewed rather than
+# silently tolerated.
+
+[graph]
+all-features = true
+
+[advisories]
+# Each ignore needs a rationale and, where the fix is upstream, a pointer to what we are
+# waiting on. None today: `cargo audit` reports no advisory and no unmaintained crate for
+# this lockfile (2026-11-06).
+ignore = []
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+    "CC0-1.0",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+# "warn", where the core repository has "deny": the optional git dependency on
+# `seleniumbase-rs` (feature `stealth`) names a tag and no `version`, and crates.io accepts
+# no dependency without one, so cargo-deny reports it as a wildcard. That is a real finding for
+# the publish lane (docs/design/dependency_review.md in the core repository) and not a reason
+# to fail every run. Make it "deny" once the library is on crates.io and the line has a version.
+wildcards = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# Feature `stealth` brings the seleniumbase-rs library from its own repository, pinned to a
+# release tag, until it is published on crates.io.
+allow-git = ["https://github.com/MustCodeAl/seleniumbase-rs"]
