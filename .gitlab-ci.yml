@@ -1,0 +1,146 @@
+# GitLab CI for tauri-plugin-sbrs-automation, modelled on the one of seleniumbase-rs (core).
+#
+# The repository is mirrored to GitLab.com after each gated publish; CI runs on GitLab's shared
+# Linux runners (2 vCPUs, 8 GB). Pipelines are created for merge requests, for the default branch
+# (`main`) and for `lane/*` and `batch/*` branches, so a lane is gated on GitLab before main moves
+# to it. A new push cancels a pipeline that is still running (every job is `interruptible`).
+#
+#   gate          fmt and clippy with `-D warnings`
+#   test          the Rust tests (the page script's tests run under Node.js)
+#   typecheck     `tsc --noEmit` of src/bridge.ts
+#   supply-chain  cargo deny and cargo audit
+#
+# The plugin depends on `tauri` with its default features off, and the lock file holds no GTK,
+# WebKitGTK or OpenSSL crate, so the Rust image needs no system library. The macOS-only code
+# (`objc2`, the WKWebView snapshot) is not compiled on Linux: it is checked on a Mac.
+#
+# A pipeline made by hand (Build > Pipelines > New pipeline) holds every job as a manual job.
+# To push a commit that needs no pipeline, put `[ci skip]` in its message.
+#
+# No job needs a secret, and none prints one: there is no `set -x`, no `env` and no token here.
+#
+# The Rust version is `rust-version` of Cargo.toml. When it moves, move RUST_VERSION below.
+
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+  rules:
+    # A lane with an open merge request gets the merge request pipeline only, not a second one for the push.
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_PIPELINE_SOURCE == "push"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: '$CI_COMMIT_BRANCH =~ /^(lane|batch)\//'
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+default:
+  interruptible: true
+  retry:
+    max: 1
+    when: runner_system_failure
+
+variables:
+  RUST_VERSION: "1.99"
+  # Two build jobs fit the 2 vCPUs and 8 GB of the runner.
+  CARGO_BUILD_JOBS: "2"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_TERM_COLOR: always
+  # A GitLab cache can only hold paths inside the project folder, so cargo keeps its registry there.
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+
+.rules_automatic:
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  - if: '$CI_COMMIT_BRANCH =~ /^(lane|batch)\//'
+  - if: $CI_PIPELINE_SOURCE == "web"
+    when: manual
+    allow_failure: true
+
+.rust:
+  image: rust:${RUST_VERSION}-bookworm
+
+# The cargo registry and the build folder, keyed by Cargo.lock. Saved even when the job fails: a
+# failed test run still built every dependency. Test executables are linked again on the next run,
+# so they are dropped before the upload.
+.target_cache:
+  cache:
+    key:
+      prefix: rust-target
+      files:
+        - Cargo.lock
+    paths:
+      - .cargo/registry/index/
+      - .cargo/registry/cache/
+      - .cargo/git/db/
+      - target/
+    when: always
+  after_script:
+    - |
+      [ -d target/debug ] || exit 0
+      rm -rf target/doc target/debug/incremental target/debug/examples target/tmp
+      find target/debug -maxdepth 1 -type f -delete
+      find target/debug/deps -type f -perm /111 ! -name '*.so' -delete
+
+# All features: `cdp`, and `stealth`, which brings the seleniumbase-rs library from git.
+gate:
+  extends:
+    - .rust
+    - .target_cache
+  rules:
+    - !reference [.rules_automatic]
+  timeout: 1h
+  script:
+    - rustc --version
+    - cargo --version
+    - rustup component add rustfmt clippy
+    - cargo fmt --all -- --check
+    - cargo clippy --all-targets --all-features -- -D warnings
+
+# `tests/bridge_js.rs` runs the page script's tests with Node.js.
+test:
+  extends:
+    - .rust
+    - .target_cache
+  rules:
+    - !reference [.rules_automatic]
+  timeout: 1h
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends nodejs
+    - node --version
+  script:
+    - cargo test --all-features --no-fail-fast
+
+# `bun run check` is `tsc --noEmit`.
+typecheck:
+  image: oven/bun:1
+  rules:
+    - !reference [.rules_automatic]
+  script:
+    - bun install --frozen-lockfile
+    - bun run check
+
+supply-chain:
+  extends: .rust
+  rules:
+    - !reference [.rules_automatic]
+  cache:
+    key:
+      prefix: supply-chain
+      files:
+        - Cargo.lock
+    paths:
+      - .cargo/bin/
+      - .cargo/.crates.toml
+      - .cargo/.crates2.json
+      - .cargo/registry/index/
+      - .cargo/registry/cache/
+      - .cargo/git/db/
+    when: always
+  script:
+    - export PATH="$CARGO_HOME/bin:$PATH"
+    - cargo install --locked --version '^0.20' cargo-deny
+    - cargo install --locked cargo-audit
+    - cargo deny --all-features check
+    - cargo audit
