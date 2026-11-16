@@ -321,7 +321,9 @@ use seleniumbase_rs::{tokio, BaseCase, BrowserConfig};
 
 #[tokio::test]
 async fn saving_a_profile() -> Result<(), seleniumbase_rs::SeleniumBaseError> {
-    let config = BrowserConfig::default().with_webdriver_url("http://127.0.0.1:4445/secret/");
+    let config = BrowserConfig::builder()
+        .webdriver_url("http://127.0.0.1:4445/secret/")
+        .build()?;
     let mut sb = BaseCase::new(config).await?;
     sb.type_text("#name", "Work").await?;
     sb.click("#save").await?;
