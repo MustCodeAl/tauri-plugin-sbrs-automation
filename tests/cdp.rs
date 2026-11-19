@@ -60,7 +60,9 @@ fn discovery_advertises_the_port_only_while_a_debugger_answers_there() {
     );
     // Nothing answers on this port, as before Chromium has started, or when
     // another process took the port and this app's debugger never bound it.
-    let driver = Driver::builder(Null, "cdp-test").cdp_port(devtools::free_port()).build();
+    let driver = Driver::builder(Null, "cdp-test")
+        .cdp_port(devtools::free_port())
+        .build();
     assert_eq!(
         driver.handle("GET", "/cdp-test/cdp", None, b"").body,
         json!({ "value": {
