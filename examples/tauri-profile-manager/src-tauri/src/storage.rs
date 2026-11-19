@@ -187,7 +187,7 @@ pub(crate) trait DocStore: Sync {
         doc: &Value,
     ) -> impl Future<Output = Result<(), StorageError>> + Send;
 
-    fn get_doc(
+    fn doc(
         &self,
         collection: &str,
         id: &str,
@@ -210,7 +210,7 @@ impl DocStore for ProfileVault {
         Ok(self.put(collection, id, doc).await?)
     }
 
-    async fn get_doc(&self, collection: &str, id: &str) -> Result<Option<Value>, StorageError> {
+    async fn doc(&self, collection: &str, id: &str) -> Result<Option<Value>, StorageError> {
         Ok(self.get(collection, id).await?)
     }
 
@@ -598,7 +598,7 @@ pub(crate) async fn migrate_legacy<S: DocStore>(
     dir: &Path,
     remove: &(dyn Fn(&Path) -> io::Result<()> + Sync),
 ) -> Result<Option<MigrationReport>, StorageError> {
-    let marker = match store.get_doc(META, IMPORT_MARKER).await? {
+    let marker = match store.doc(META, IMPORT_MARKER).await? {
         Some(doc) => serde_json::from_value::<ImportMarker>(doc).ok(),
         None => None,
     };
@@ -638,7 +638,7 @@ pub(crate) async fn migrate_legacy<S: DocStore>(
 
     for (kind, docs) in &imported {
         for doc in docs {
-            let stored = store.get_doc(kind.collection(), &doc.id).await?;
+            let stored = store.doc(kind.collection(), &doc.id).await?;
             let matches = stored
                 .as_ref()
                 .is_some_and(|stored| *stored == doc.normalized && json_covers(&doc.raw, stored));
@@ -894,8 +894,8 @@ mod tests {
             self.inner.put_doc(collection, id, doc).await
         }
 
-        async fn get_doc(&self, collection: &str, id: &str) -> Result<Option<Value>, StorageError> {
-            self.inner.get_doc(collection, id).await
+        async fn doc(&self, collection: &str, id: &str) -> Result<Option<Value>, StorageError> {
+            self.inner.doc(collection, id).await
         }
 
         async fn list_docs(&self, collection: &str) -> Result<Vec<(String, Value)>, StorageError> {
@@ -981,7 +981,7 @@ mod tests {
             "Clients"
         );
         assert!(
-            store.get_doc(META, IMPORT_MARKER).await.unwrap().is_none(),
+            store.doc(META, IMPORT_MARKER).await.unwrap().is_none(),
             "the bookkeeping record is removed once the files are gone"
         );
     }
@@ -1018,7 +1018,7 @@ mod tests {
             assert!(exists(dir.path(), file), "{file} must not be deleted");
         }
         assert!(
-            store.get_doc(META, IMPORT_MARKER).await.unwrap().is_none(),
+            store.doc(META, IMPORT_MARKER).await.unwrap().is_none(),
             "an unverified import leaves no record that it was verified"
         );
     }
@@ -1195,7 +1195,7 @@ mod tests {
         assert!(!exists(dir.path(), "tags.json"));
         let profiles: Vec<Profile> = load_typed(&store, PROFILES).await.unwrap();
         assert_eq!(profiles[0].name, "Edited in the vault");
-        assert!(store.get_doc(META, IMPORT_MARKER).await.unwrap().is_none());
+        assert!(store.doc(META, IMPORT_MARKER).await.unwrap().is_none());
     }
 
     #[tokio::test]

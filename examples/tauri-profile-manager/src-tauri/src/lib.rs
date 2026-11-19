@@ -22,7 +22,7 @@ use store::{AppState, next_api_port};
 
 /// Whether the profile vault opened, for the window to explain when it did not.
 #[command]
-fn get_storage_status(state: State<'_, Arc<AppState>>) -> StorageStatus {
+fn storage_status(state: State<'_, Arc<AppState>>) -> StorageStatus {
     state.storage_status()
 }
 
@@ -238,7 +238,7 @@ async fn close_session(state: State<'_, Arc<AppState>>, session_id: String) -> R
 }
 
 #[command]
-async fn get_api_base() -> Result<String, String> {
+async fn api_base() -> Result<String, String> {
     Ok(format!("http://127.0.0.1:{}", next_api_port()))
 }
 
@@ -260,7 +260,7 @@ async fn control_profile_window<R: Runtime>(
 /// app's own frontend. A web page can send requests to the loopback API but
 /// has no way to obtain the token they must carry.
 #[command]
-async fn get_api_token(state: State<'_, Arc<AppState>>) -> Result<String, String> {
+async fn api_token(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     Ok(state.api_token.clone())
 }
 
@@ -299,7 +299,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(generate_handler![
-            get_storage_status,
+            storage_status,
             list_profiles,
             create_profile,
             delete_profile,
@@ -312,8 +312,8 @@ pub fn run() {
             take_screenshot,
             set_session_geolocation,
             close_session,
-            get_api_base,
-            get_api_token,
+            api_base,
+            api_token,
         ])
         .run(generate_context!())
         .expect("error while running tauri application");

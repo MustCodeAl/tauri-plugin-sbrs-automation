@@ -31,7 +31,7 @@ let editingFingerprint;
 let storageLocked = false;
 
 async function apiBase() {
-  return invoke("get_api_base");
+  return invoke("api_base");
 }
 
 // The local API is reachable by anything running on this machine, including
@@ -41,7 +41,7 @@ let apiTokenPromise = null;
 
 async function apiToken() {
   if (!apiTokenPromise) {
-    apiTokenPromise = invoke("get_api_token").catch((err) => {
+    apiTokenPromise = invoke("api_token").catch((err) => {
       // Let a later call retry rather than caching the failure forever.
       apiTokenPromise = null;
       throw err;
@@ -703,7 +703,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 async function showStorageStatus() {
   const banner = $("#storage-banner");
   try {
-    const status = await invoke("get_storage_status");
+    const status = await invoke("storage_status");
     const message = status.error || status.warning;
     storageLocked = !status.ok;
     $("#open-create").disabled = storageLocked;

@@ -237,7 +237,7 @@ Authorization: Bearer <token>
 ```
 
 The token is 256 bits of OS randomness, minted fresh on each start and never
-written to disk. The app window fetches it over Tauri IPC (`get_api_token`),
+written to disk. The app window fetches it over Tauri IPC (`api_token`),
 which is reachable only from the app's own frontend.
 
 This matters more than it first looks. Binding to `127.0.0.1` keeps the API off
@@ -304,7 +304,7 @@ Example:
 
 ```bash
 # Copy the token from the app window, or read it from the running process.
-TOKEN='<token from get_api_token>'
+TOKEN='<token from api_token>'
 
 curl http://127.0.0.1:45001/api/v1/profiles \
   -H "authorization: Bearer $TOKEN"
