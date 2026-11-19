@@ -178,27 +178,79 @@ pub struct Driver<B> {
     timeouts: Mutex<Timeouts>,
 }
 
-impl<B: Bridge> Driver<B> {
-    /// A driver whose URLs start with `/<token>`.
-    pub fn new(bridge: B, token: impl Into<String>) -> Self {
-        Self {
-            bridge,
-            token: token.into(),
-            cdp_port: None,
+impl<B: std::fmt::Debug> std::fmt::Debug for Driver<B> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The token is a secret and is left out.
+        formatter
+            .debug_struct("Driver")
+            .field("bridge", &self.bridge)
+            .field("cdp_port", &self.cdp_port)
+            .field("session", &self.session)
+            .field("sessions", &self.sessions)
+            .field("timeouts", &self.timeouts)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Builds a [`Driver`]. The token is not shown by [`Debug`](std::fmt::Debug).
+#[must_use = "a builder does nothing until `build` is called"]
+pub struct DriverBuilder<B> {
+    bridge: B,
+    token: String,
+    cdp_port: Option<u16>,
+}
+
+impl<B: std::fmt::Debug> std::fmt::Debug for DriverBuilder<B> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DriverBuilder")
+            .field("bridge", &self.bridge)
+            .field("cdp_port", &self.cdp_port)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<B> DriverBuilder<B> {
+    /// Sets the port `GET /<token>/cdp` reports for this app's Chromium.
+    /// The plugin passes the port read at start-up from the launch settings
+    /// ([`crate::cdp::enabled_port`]). Without `cdp_port`, that route says CDP
+    /// is off, whatever the environment holds.
+    #[must_use = "a builder does nothing until `build` is called"]
+    pub fn cdp_port(mut self, port: u16) -> Self {
+        self.cdp_port = Some(port);
+        self
+    }
+
+    /// The driver. Nothing to validate.
+    #[must_use]
+    pub fn build(self) -> Driver<B> {
+        Driver {
+            bridge: self.bridge,
+            token: self.token,
+            cdp_port: self.cdp_port,
             session: Mutex::new(None),
             sessions: AtomicU64::new(0),
             timeouts: Mutex::new(Timeouts::default()),
         }
     }
+}
 
-    /// Reports `port` on `GET /<token>/cdp` as the debugging port of the app's
-    /// own Chromium. The plugin passes the port its start-up read from the
-    /// launch settings ([`crate::cdp::enabled_port`]); without this call the
-    /// route says CDP is off, whatever the environment holds.
-    #[must_use]
-    pub fn with_cdp_port(mut self, port: u16) -> Self {
-        self.cdp_port = Some(port);
-        self
+impl<B: Bridge> Driver<B> {
+    /// A driver whose URLs start with `/<token>`.
+    pub fn new(bridge: B, token: impl Into<String>) -> Self {
+        Self::builder(bridge, token).build()
+    }
+
+    /// A builder for a driver whose URLs start with `/<token>`.
+    /// [`DriverBuilder::cdp_port`] sets the debugging port before
+    /// [`DriverBuilder::build`]. [`Driver::new`] leaves that port unset.
+    #[must_use = "a builder does nothing until `build` is called"]
+    pub fn builder(bridge: B, token: impl Into<String>) -> DriverBuilder<B> {
+        DriverBuilder {
+            bridge,
+            token: token.into(),
+            cdp_port: None,
+        }
     }
 
     /// Answers one request. `origin` is the request's `Origin` header: browsers

@@ -121,10 +121,9 @@ fn probe() {
     // What the plugin does when it starts: read the port once from the launch
     // settings, never from the environment.
     let port = enabled_port();
-    let driver = Driver::new(Null, "env-test");
     let driver = match port {
-        Some(port) => driver.with_cdp_port(port),
-        None => driver,
+        Some(port) => Driver::builder(Null, "env-test").cdp_port(port).build(),
+        None => Driver::new(Null, "env-test"),
     };
     let ask = || driver.handle("GET", "/env-test/cdp", None, b"").body;
     // Nothing leaves the debugger's port in the environment for child

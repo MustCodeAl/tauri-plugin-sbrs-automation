@@ -31,6 +31,11 @@ type Png = Result<Vec<u8>, WebDriverError>;
 
 /// Takes a PNG snapshot of the window's web view, or of `area` of it, and
 /// returns it base64-encoded.
+///
+/// # Errors
+///
+/// The main thread could not be reached, the window has no web view, WebKit
+/// reported an error, or the snapshot was not drawn in time.
 pub fn take<R: Runtime>(
     window: &WebviewWindow<R>,
     area: Option<ViewportRect>,

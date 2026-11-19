@@ -170,7 +170,7 @@ pub fn enabled_port() -> Option<u16> {
 /// ```
 /// # #[cfg(feature = "cdp")] {
 /// use tauri_plugin_sbrs_automation::cdp::CdpStealthConfig;
-/// let config = CdpStealthConfig::default().debugging_port(9333);
+/// let config = CdpStealthConfig::builder().debugging_port(9333).build();
 /// // Nothing at all when automation is off (a release build without
 /// // `SBRS_AUTOMATION=1`).
 /// let args = config.chromium_args();
@@ -212,28 +212,72 @@ impl Default for CdpStealthConfig {
     }
 }
 
+/// Builds [`CdpStealthConfig`].
+///
+/// [`CdpStealthConfig::builder`] starts from [`Default`] (it reads
+/// `SBRS_CDP_PORT`). [`CdpStealthConfig::into_builder`] starts from an existing
+/// value. `build` cannot fail: port `0` means "pick a free port", and that is
+/// applied by [`debugging_port`](Self::debugging_port).
 #[cfg(feature = "cdp")]
-impl CdpStealthConfig {
+#[derive(Debug, Clone)]
+#[must_use = "a builder does nothing until `build` is called"]
+pub struct CdpStealthConfigBuilder {
+    debugging_port: Option<u16>,
+    stealth_args: bool,
+    extra_args: Vec<String>,
+}
+
+#[cfg(feature = "cdp")]
+impl CdpStealthConfigBuilder {
     /// Selects a fixed local debugging port; zero asks for a free one, as
     /// `None` does. The port must be free when the arguments are built.
-    #[must_use]
+    #[must_use = "a builder does nothing until `build` is called"]
     pub fn debugging_port(mut self, port: u16) -> Self {
         self.debugging_port = Some(port).filter(|port| *port != 0);
         self
     }
 
     /// Opts in to (or out of) the stealth arguments. Off by default.
-    #[must_use]
+    #[must_use = "a builder does nothing until `build` is called"]
     pub fn stealth_args(mut self, enabled: bool) -> Self {
         self.stealth_args = enabled;
         self
     }
 
     /// Adds a trusted Chromium argument.
-    #[must_use]
+    #[must_use = "a builder does nothing until `build` is called"]
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
         self.extra_args.push(arg.into());
         self
+    }
+
+    /// The launch settings these choices describe.
+    #[must_use]
+    pub fn build(self) -> CdpStealthConfig {
+        CdpStealthConfig {
+            debugging_port: self.debugging_port,
+            stealth_args: self.stealth_args,
+            extra_args: self.extra_args,
+        }
+    }
+}
+
+#[cfg(feature = "cdp")]
+impl CdpStealthConfig {
+    /// A builder that starts from [`Default`], which reads `SBRS_CDP_PORT`.
+    #[must_use = "a builder does nothing until `build` is called"]
+    pub fn builder() -> CdpStealthConfigBuilder {
+        Self::default().into_builder()
+    }
+
+    /// A builder holding these settings.
+    #[must_use = "a builder does nothing until `build` is called"]
+    pub fn into_builder(self) -> CdpStealthConfigBuilder {
+        CdpStealthConfigBuilder {
+            debugging_port: self.debugging_port,
+            stealth_args: self.stealth_args,
+            extra_args: self.extra_args,
+        }
     }
 
     /// Returns the loopback debugging switches, the opt-in stealth flags and
@@ -612,8 +656,9 @@ mod tests {
     fn a_free_port_that_was_asked_for_is_kept() {
         let port = devtools::free_port();
         assert_eq!(
-            CdpStealthConfig::default()
+            CdpStealthConfig::builder()
                 .debugging_port(port)
+                .build()
                 .resolve(true),
             Some(port)
         );
@@ -626,9 +671,10 @@ mod tests {
         // port would attach to that other browser.
         let taken = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = taken.local_addr().unwrap().port();
-        let config = CdpStealthConfig::default()
+        let config = CdpStealthConfig::builder()
             .debugging_port(port)
-            .stealth_args(true);
+            .stealth_args(true)
+            .build();
         assert_eq!(config.resolve(true), None);
         assert!(config.args_with(true).is_empty());
     }
@@ -636,12 +682,16 @@ mod tests {
     #[test]
     fn port_zero_asks_for_a_free_port_like_none() {
         assert_eq!(
-            CdpStealthConfig::default().debugging_port(0).debugging_port,
+            CdpStealthConfig::builder()
+                .debugging_port(0)
+                .build()
+                .debugging_port,
             None
         );
         assert_eq!(
-            CdpStealthConfig::default()
+            CdpStealthConfig::builder()
                 .debugging_port(9333)
+                .build()
                 .debugging_port,
             Some(9333)
         );
@@ -652,10 +702,11 @@ mod tests {
         // A release build must not open a debugging port, whatever the app
         // asked for: not the port, not the stealth flags, not the extras.
         let port = devtools::free_port();
-        let config = CdpStealthConfig::default()
+        let config = CdpStealthConfig::builder()
             .debugging_port(port)
             .stealth_args(true)
-            .arg("--lang=en-US");
+            .arg("--lang=en-US")
+            .build();
         assert!(config.args_with(false).is_empty());
         assert_eq!(config.resolve(false), None);
         let on = config.args_with(true);
@@ -693,8 +744,9 @@ mod tests {
         // site isolation, the popup blocker, phishing detection, the update
         // of component data, the encryption of stored cookies and passwords,
         // and WebRTC's hiding of the local address.
-        let args = CdpStealthConfig::default()
+        let args = CdpStealthConfig::builder()
             .stealth_args(true)
+            .build()
             .args_with(true)
             .join(" ");
         for weakening in [
@@ -718,10 +770,11 @@ mod tests {
     #[test]
     fn opt_in_stealth_adds_exactly_the_vetted_arguments() {
         let port = devtools::free_port();
-        let config = CdpStealthConfig::default()
+        let config = CdpStealthConfig::builder()
             .debugging_port(port)
             .stealth_args(true)
-            .arg("--lang=en-US");
+            .arg("--lang=en-US")
+            .build();
         let args = config.args_with(true);
         assert_eq!(
             &args[..2],
@@ -737,9 +790,10 @@ mod tests {
     #[test]
     fn stealth_can_be_disabled_without_disabling_loopback_debugging() {
         let port = devtools::free_port();
-        let args = CdpStealthConfig::default()
+        let args = CdpStealthConfig::builder()
             .debugging_port(port)
             .stealth_args(false)
+            .build()
             .args_with(true);
         assert_eq!(
             args,
@@ -769,16 +823,17 @@ mod tests {
             "--remote-debugging-\"port\"=9999",
             "--EDGE-WEBVIEW-SWITCHES=x",
         ] {
-            let args = CdpStealthConfig::default().arg(arg).args_with(true);
+            let args = CdpStealthConfig::builder().arg(arg).build().args_with(true);
             assert!(!args.contains(&arg.to_owned()), "{arg} reached {args:?}");
         }
     }
 
     #[test]
     fn ordinary_arguments_are_kept() {
-        let args = CdpStealthConfig::default()
+        let args = CdpStealthConfig::builder()
             .arg("--lang=en-US")
             .arg("--user-agent=Tests/1.0")
+            .build()
             .args_with(true);
         assert!(args.contains(&"--lang=en-US".to_owned()));
         assert!(args.contains(&"--user-agent=Tests/1.0".to_owned()));

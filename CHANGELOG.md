@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Breaking: `CdpStealthConfig::debugging_port`, `stealth_args` and `arg` are
+  methods of `CdpStealthConfigBuilder` (`CdpStealthConfig::builder` or
+  `into_builder`, then `build`). `Driver::with_cdp_port` is removed; use
+  `Driver::builder(bridge, token).cdp_port(port).build()`. `Debug` for
+  `Driver` omits the token. The example's commands `get_storage_status`,
+  `get_api_base` and `get_api_token` are `storage_status`, `api_base` and
+  `api_token`, and `DocStore::get_doc` is `doc`.
+
 - The example's app window is a small browser: a toolbar webview above the
   page with Back, Forward, Reload/Stop and an address bar, which moves the page
   over its DevTools channel. `Open in app` on a profile with no fingerprint

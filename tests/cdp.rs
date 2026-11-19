@@ -50,7 +50,7 @@ fn discovery_says_off_when_the_launch_settings_enabled_no_port() {
 #[test]
 fn discovery_advertises_the_port_only_while_a_debugger_answers_there() {
     let port = devtools::serve_devtools();
-    let driver = Driver::new(Null, "cdp-test").with_cdp_port(port);
+    let driver = Driver::builder(Null, "cdp-test").cdp_port(port).build();
     assert_eq!(
         driver.handle("GET", "/cdp-test/cdp", None, b"").body,
         json!({ "value": {
@@ -60,7 +60,7 @@ fn discovery_advertises_the_port_only_while_a_debugger_answers_there() {
     );
     // Nothing answers on this port, as before Chromium has started, or when
     // another process took the port and this app's debugger never bound it.
-    let driver = Driver::new(Null, "cdp-test").with_cdp_port(devtools::free_port());
+    let driver = Driver::builder(Null, "cdp-test").cdp_port(devtools::free_port()).build();
     assert_eq!(
         driver.handle("GET", "/cdp-test/cdp", None, b"").body,
         json!({ "value": {
@@ -72,7 +72,7 @@ fn discovery_advertises_the_port_only_while_a_debugger_answers_there() {
 #[test]
 fn discovery_does_not_follow_a_listener_that_is_not_chromium() {
     let port = devtools::serve_raw(|_| devtools::http("HTTP/1.1 200 OK", r#"{"status":"ok"}"#));
-    let driver = Driver::new(Null, "cdp-test").with_cdp_port(port);
+    let driver = Driver::builder(Null, "cdp-test").cdp_port(port).build();
     let reply = driver.handle("GET", "/cdp-test/cdp", None, b"");
     assert_eq!(reply.status, 200);
     assert_eq!(reply.body["value"]["cdpEnabled"], false);
@@ -89,9 +89,10 @@ fn chromium_configuration_is_available_to_an_app() {
         return;
     }
 
-    let args = tauri_plugin_sbrs_automation::cdp::CdpStealthConfig::default()
+    let args = tauri_plugin_sbrs_automation::cdp::CdpStealthConfig::builder()
         .debugging_port(9333)
         .stealth_args(true)
+        .build()
         .chromium_args();
     assert!(args.contains(&"--remote-debugging-address=127.0.0.1".to_owned()));
     assert!(args.contains(&"--remote-debugging-port=9333".to_owned()));

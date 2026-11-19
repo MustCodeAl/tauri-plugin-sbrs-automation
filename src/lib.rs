@@ -75,13 +75,14 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             };
             let addr = SocketAddr::from(([127, 0, 0, 1], settings.port));
             // A port in use is reported, not fatal: the app keeps running.
-            let driver = Driver::new(bridge, settings.token.clone());
             // The debugging port is read once, here, from the launch settings
             // of this process. The environment is never asked, so a variable
             // inherited from a parent cannot name a port.
             let driver = match cdp::enabled_port() {
-                Some(port) => driver.with_cdp_port(port),
-                None => driver,
+                Some(port) => Driver::builder(bridge, settings.token.clone())
+                    .cdp_port(port)
+                    .build(),
+                None => Driver::new(bridge, settings.token.clone()),
             };
             server::start(addr, driver, &settings.token);
             Ok(())

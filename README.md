@@ -171,8 +171,8 @@ parent process, and `apply_env` exports nothing but the WebView2 variable.
 | Setting | Behaviour |
 |---|---|
 | `SBRS_CDP_PORT` | Optional, and read only by `CdpStealthConfig::default()`: a valid non-zero port to ask for. Unset, invalid or `0`: a **free loopback port is picked**, the same one for the life of the process. A port that is asked for but in use enables nothing and says so on stderr, so a client cannot end up at another browser. |
-| `CdpStealthConfig::stealth_args(true)` | Off by default. Adds five flags: `--disable-blink-features=AutomationControlled`, the three background-throttling flags and `--disable-prompt-on-repost`. seleniumbase-rs's longer list is **not** used: it turns off site isolation, the popup blocker, phishing detection, component updates and the encryption of stored cookies and passwords in your app's own browser. |
-| `CdpStealthConfig::arg(..)` | Your own trusted arguments. Anything that names a `--remote-debugging-*`, `--remote-allow-origins` or `--edge-webview-switches` switch (any case, any prefix) is dropped, and so is an argument with a NUL byte. |
+| `CdpStealthConfig::builder().stealth_args(true)` | Off by default. Adds five flags: `--disable-blink-features=AutomationControlled`, the three background-throttling flags and `--disable-prompt-on-repost`. seleniumbase-rs's longer list is **not** used: it turns off site isolation, the popup blocker, phishing detection, component updates and the encryption of stored cookies and passwords in your app's own browser. |
+| `CdpStealthConfig::builder().arg(..)` | Your own trusted arguments. Anything that names a `--remote-debugging-*`, `--remote-allow-origins` or `--edge-webview-switches` switch (any case, any prefix) is dropped, and so is an argument with a NUL byte. |
 
 `GET /<token>/cdp` answers with the port only while a Chromium debugger
 answers `GET /json/version` there:
