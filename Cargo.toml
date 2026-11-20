@@ -32,10 +32,9 @@ tauri = { version = "=3.0.0-alpha.5", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny_http = "0.12"
-# Feature `stealth` only. Tracks seleniumbase-rs `main`; the lockfile holds the
-# commit. The plugin and the app must agree on the library's types (`StealthPlan`,
-# `Page`), so bump the lockfile deliberately.
-seleniumbase-rs = { git = "https://github.com/MustCodeAl/seleniumbase-rs", branch = "main", default-features = false, optional = true }
+# Feature `stealth` only. Pinned to a release tag: the plugin and the app must agree
+# on the library's types (`StealthPlan`, `Page`), so bump it deliberately.
+seleniumbase-rs = { git = "https://github.com/MustCodeAl/seleniumbase-rs", tag = "v0.8.5", default-features = false, optional = true }
 
 [build-dependencies]
 tauri-plugin = { version = "=3.0.0-alpha.4", features = ["build"] }
