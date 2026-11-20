@@ -4,7 +4,7 @@ use std::fmt;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use seleniumbase_rs::{BrowserConfig, Fingerprint, OsType};
+use seleniumbase_rs::{BrowserConfig, Fingerprint, OsType, SeleniumBaseError};
 
 use crate::models::{
     Engine, Folder, Profile, RandomizeRequest, Randomized, SessionInfo, StorageStatus, Tag,
@@ -345,27 +345,45 @@ pub(crate) fn default_profiles() -> Vec<Profile> {
     ]
 }
 
-pub fn build_config(profile: &Profile) -> BrowserConfig {
-    let mut config = if let Some(params) = profile.external_profile.as_ref() {
-        params.to_browser_config(&profile.container_url)
+/// The browser configuration a launch of `profile` uses.
+///
+/// An imported profile supplies the base configuration. Otherwise the profile's
+/// own browser, address, proxy and locale do, and no driver is started here. A
+/// fingerprint on the profile replaces an imported one.
+///
+/// # Errors
+///
+/// [`SeleniumBaseError`] when the configuration is refused.
+pub fn build_config(profile: &Profile) -> Result<BrowserConfig, SeleniumBaseError> {
+    let mut builder = if let Some(params) = profile.external_profile.as_ref() {
+        params
+            .to_browser_config(&profile.container_url)
+            .into_builder()
     } else {
-        BrowserConfig {
-            webdriver_url: profile.container_url.clone(),
-            browser: profile.browser,
-            headless: profile.headless,
-            mode: profile.mode,
-            user_agent: profile.user_agent.clone(),
-            proxy: profile.proxy.clone(),
-            locale: profile.locale.clone(),
-            auto_start_driver: false,
-            ..BrowserConfig::default()
+        let mut builder = BrowserConfig::builder()
+            .webdriver_url(profile.container_url.clone())
+            .browser(profile.browser)
+            .headless(profile.headless)
+            .mode(profile.mode);
+        if let Some(user_agent) = &profile.user_agent {
+            builder = builder.user_agent(user_agent.as_str());
         }
+        if let Some(proxy) = &profile.proxy {
+            builder = builder.proxy(proxy.as_str());
+        }
+        if let Some(locale) = &profile.locale {
+            builder = builder.locale(locale.as_str());
+        }
+        builder
     };
-    // Explicit profile fingerprint overrides the external profile payload.
-    if let Some(fingerprint) = profile.fingerprint.as_ref() {
-        config.fingerprint = Some(fingerprint.clone());
+    if let Some(fingerprint) = &profile.fingerprint {
+        builder = builder.fingerprint(fingerprint.clone());
     }
-    config
+    let mut config = builder.build()?;
+    if profile.external_profile.is_none() {
+        config.session.auto_start_driver = false;
+    }
+    Ok(config)
 }
 
 pub fn next_api_port() -> u16 {

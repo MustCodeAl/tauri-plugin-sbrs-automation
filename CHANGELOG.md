@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The `stealth` feature and the profile-manager example track seleniumbase-rs `main` (the lockfiles hold the commit, and `tests/manifest.rs` checks they are the same commit) instead of tag `v0.7.0`. `BrowserConfig` is built with `BrowserConfig::builder()` and read through `browser` and `session`.
+
 - Breaking: `CdpStealthConfig::debugging_port`, `stealth_args` and `arg` are
   methods of `CdpStealthConfigBuilder` (`CdpStealthConfig::builder` or
   `into_builder`, then `build`). `Driver::with_cdp_port` is removed; use

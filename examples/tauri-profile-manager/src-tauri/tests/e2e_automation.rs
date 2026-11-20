@@ -196,7 +196,7 @@ async fn wait_for_cards(sb: &mut BaseCase, count: usize) -> Result<(), Box<dyn E
 
 /// What the test does in the window.
 async fn drive(sb: &mut BaseCase) -> Result<(), Box<dyn Error>> {
-    assert_eq!(sb.get_title().await?, TITLE);
+    assert_eq!(sb.title().await?, TITLE);
     sb.assert_text("Profile Manager", "h1").await?;
 
     // A new vault starts with sample profiles; the list fills in after load.
@@ -227,13 +227,13 @@ async fn drive(sb: &mut BaseCase) -> Result<(), Box<dyn Error>> {
 
     // The window's own rectangle (the page alone would say 0 x 0): at least
     // the 800 x 600 of tauri.conf.json, and it can be resized.
-    let (_, _, width, height) = sb.get_window_rect().await?;
+    let (_, _, width, height) = sb.window_rect().await?;
     assert!(
         width >= 800 && height >= 600,
         "the window is {width} x {height}"
     );
     sb.set_window_size(900, 700).await?;
-    let (x, y, width, height) = sb.get_window_rect().await?;
+    let (x, y, width, height) = sb.window_rect().await?;
     assert_eq!(
         (width, height),
         (900, 700),
@@ -270,10 +270,10 @@ async fn dialogs(sb: &mut BaseCase) -> Result<(), Box<dyn Error>> {
         "unexpected refusal: {refusal}"
     );
     eprintln!("a late accept is refused: {refusal}");
-    assert_eq!(sb.get_alert_text().await?, "Delete the E2E profile?");
+    assert_eq!(sb.alert_text().await?, "Delete the E2E profile?");
     sb.dismiss_alert().await?;
     assert!(
-        sb.get_alert_text().await.is_err(),
+        sb.alert_text().await.is_err(),
         "the dialog was dismissed, yet its text is still there"
     );
 
@@ -288,9 +288,9 @@ async fn dialogs(sb: &mut BaseCase) -> Result<(), Box<dyn Error>> {
     sb.accept_alert().await?;
     sb.click("#e2e-leave").await?;
     sb.wait_for_text("leave true", "#e2e-answer", 10).await?;
-    assert_eq!(sb.get_alert_text().await?, "Unsaved changes");
+    assert_eq!(sb.alert_text().await?, "Unsaved changes");
     sb.accept_alert().await?;
-    assert_eq!(sb.get_alert_text().await?, "Leave the page?");
+    assert_eq!(sb.alert_text().await?, "Leave the page?");
     sb.accept_alert().await?;
 
     // A prompt's text, sent and accepted before it opens.
@@ -298,7 +298,7 @@ async fn dialogs(sb: &mut BaseCase) -> Result<(), Box<dyn Error>> {
     sb.accept_alert().await?;
     sb.click("#e2e-prompt").await?;
     sb.wait_for_text("prompt Ada", "#e2e-answer", 10).await?;
-    assert_eq!(sb.get_alert_text().await?, "Your name?");
+    assert_eq!(sb.alert_text().await?, "Your name?");
     sb.accept_alert().await?;
 
     // And with nothing set, the prompt is dismissed.
@@ -322,7 +322,7 @@ async fn frames(sb: &mut BaseCase) -> Result<(), Box<dyn Error>> {
         .await?;
     assert_eq!(found, "Inside the frame");
     sb.click("#frame-alert").await?;
-    assert_eq!(sb.get_alert_text().await?, "From the frame");
+    assert_eq!(sb.alert_text().await?, "From the frame");
     sb.accept_alert().await?;
     sb.switch_to_default_content().await?;
     assert!(
@@ -352,7 +352,7 @@ async fn frames(sb: &mut BaseCase) -> Result<(), Box<dyn Error>> {
 /// that scrolls smoothly.
 async fn actions(sb: &mut BaseCase) -> Result<(), Box<dyn Error>> {
     sb.double_click("#e2e-twice").await?;
-    assert_eq!(sb.get_text("#e2e-clicks").await?, "click1 click2 dblclick");
+    assert_eq!(sb.text("#e2e-clicks").await?, "click1 click2 dblclick");
 
     sb.hover("#e2e-hover").await?;
     sb.wait_for_text("Hovered", "#e2e-hover", 10).await?;
@@ -443,7 +443,9 @@ async fn the_profile_window_is_driven_over_webdriver() -> Result<(), Box<dyn Err
     // The first start derives the vault key, which takes a while in a debug build.
     app.wait_until_served(Duration::from_secs(120))?;
 
-    let config = BrowserConfig::default().with_webdriver_url(WEBDRIVER_URL);
+    let config = BrowserConfig::builder()
+        .webdriver_url(WEBDRIVER_URL)
+        .build()?;
     let mut sb = BaseCase::new(config).await?;
     let outcome = drive(&mut sb).await;
     sb.quit().await?;

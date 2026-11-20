@@ -179,9 +179,10 @@ async fn launch_webdriver(
     profile: &Profile,
     start_url: Option<&str>,
 ) -> Result<Session, LaunchError> {
-    let mut sb = BaseCase::new(build_config(profile))
-        .await
-        .map_err(|e| at(Stage::Launch, e.to_string()))?;
+    let mut sb =
+        BaseCase::new(build_config(profile).map_err(|error| at(Stage::Launch, error.to_string()))?)
+            .await
+            .map_err(|e| at(Stage::Launch, e.to_string()))?;
     match prepare_webdriver(&mut sb, profile, start_url).await {
         Ok(()) => Ok(Session::WebDriver(Box::new(sb))),
         Err(error) => {
@@ -309,7 +310,7 @@ pub struct PureCdpSession {
 
 impl PureCdpSession {
     async fn launch(profile: &Profile, start_url: Option<&str>) -> Result<Self, LaunchError> {
-        let config = build_config(profile);
+        let config = build_config(profile).map_err(|error| at(Stage::Launch, error.to_string()))?;
         let options = launch_options(&config).map_err(|message| at(Stage::Launch, message))?;
         let browser = CdpBrowser::launch(options)
             .await
@@ -334,7 +335,7 @@ impl PureCdpSession {
         config: &BrowserConfig,
         start_url: Option<&str>,
     ) -> Result<Self, LaunchError> {
-        let options = context_options(config.proxy.as_deref())
+        let options = context_options(config.browser.proxy.server.as_deref())
             .map_err(|message| at(Stage::Launch, message))?;
         let context = browser
             .new_context_with(options)
@@ -420,12 +421,12 @@ impl PureCdpSession {
 /// The proxy is not set here. It goes to the profile's browser context
 /// instead, so its password is answered for that context's tabs only.
 fn launch_options(config: &BrowserConfig) -> Result<LaunchOptions, String> {
-    let mut builder = LaunchOptions::builder().headless(config.headless);
-    if let Some(user_agent) = &config.user_agent {
-        builder = builder.user_agent(user_agent);
+    let mut builder = LaunchOptions::builder().headless(config.browser.headless);
+    if let Some(user_agent) = &config.browser.user_agent {
+        builder = builder.user_agent(user_agent.as_str());
     }
-    if let Some(locale) = &config.locale {
-        builder = builder.lang(locale);
+    if let Some(locale) = &config.browser.lang {
+        builder = builder.lang(locale.as_str());
     }
     if let Some((width, height)) = config
         .fingerprint
@@ -467,7 +468,7 @@ async fn prepare(
             .await
             .map_err(|message| at(Stage::Cookies, message))?;
     }
-    if let Some(url) = start_url.or(config.start_page.as_deref()) {
+    if let Some(url) = start_url.or(config.browser.url.as_deref()) {
         page.goto(url)
             .await
             .map_err(|e| at(Stage::Open, e.to_string()))?;
@@ -496,7 +497,8 @@ async fn apply_identity(
     // A second locale override on the same tab can be refused, so only set one
     // when the fingerprint did not.
     if let Some(locale) = config
-        .locale
+        .browser
+        .lang
         .as_deref()
         .filter(|_| fingerprint.is_none_or(|fp| fp.locale().is_natural()))
     {
@@ -651,7 +653,7 @@ mod tests {
         profile: &Profile,
         start_url: Option<&str>,
     ) -> Result<PureCdpSession, LaunchError> {
-        let config = build_config(profile);
+        let config = build_config(profile).map_err(|error| at(Stage::Launch, error.to_string()))?;
         PureCdpSession::start(browser.clone(), profile, &config, start_url).await
     }
 
@@ -1064,7 +1066,7 @@ mod tests {
             "proxy": format!("http://alice:{FAKE_PROXY_PASSWORD}@proxy.example:8080"),
         }));
 
-        let options = launch_options(&build_config(&profile)).unwrap();
+        let options = launch_options(&build_config(&profile).unwrap()).unwrap();
 
         assert!(options.is_headless());
         assert!(
@@ -1077,7 +1079,7 @@ mod tests {
     fn a_headed_profile_launches_headed() {
         let profile = pure_cdp_profile(json!({ "headless": false }));
 
-        let options = launch_options(&build_config(&profile)).unwrap();
+        let options = launch_options(&build_config(&profile).unwrap()).unwrap();
 
         assert!(!options.is_headless());
     }

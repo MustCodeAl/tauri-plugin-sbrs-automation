@@ -253,16 +253,16 @@ impl ProfileWindow {
     pub fn plan(profile: &Profile, url: Option<&str>) -> Result<Self, String> {
         let url = start_url(url)?;
         let label = window_label(&profile.id)?;
-        let config = build_config(profile);
+        let config = build_config(profile).map_err(|error| error.to_string())?;
         let fingerprint = config.fingerprint.ok_or_else(|| {
             format!(
                 "\"{}\" has no fingerprint to open with: randomize it or set one first",
                 profile.name
             )
         })?;
-        let (proxy, proxy_login) = proxy_url(config.proxy.as_deref()).unzip();
+        let (proxy, proxy_login) = proxy_url(config.browser.proxy.server.as_deref()).unzip();
         let proxy_login = proxy_login.flatten();
-        if config.proxy.is_some() && proxy.is_none() {
+        if config.browser.proxy.server.is_some() && proxy.is_none() {
             warn!(profile_id = %profile.id, "the proxy is not an http or socks5 address: the window opens without it");
         }
         Ok(Self {

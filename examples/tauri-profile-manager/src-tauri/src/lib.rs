@@ -146,7 +146,11 @@ where
     // A profile with no fingerprint gets one drawn for this machine's
     // system and saved first, as `Randomize` does, so the window never shows
     // the real browser and the profile keeps the same identity next time.
-    let profile = if store::build_config(&profile).fingerprint.is_some() {
+    let profile = if store::build_config(&profile)
+        .map_err(|error| error.to_string())?
+        .fingerprint
+        .is_some()
+    {
         profile
     } else {
         let randomized = state

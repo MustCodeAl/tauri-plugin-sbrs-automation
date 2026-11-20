@@ -169,9 +169,9 @@ and typing are DOM events, so the mouse and keyboard stay yours. Ports 4545 and
 - `Cargo.toml` takes the plugin from this repository (`path = "../../.."`);
   an app of your own takes it by `git`. The plugin is always built in, for
   its `stealth` feature; the `e2e` feature only registers `init()`.
-- `seleniumbase-rs` comes by git at the `v0.7.0` tag, the one the plugin's
-  `stealth` feature pins, so the app and the plugin share one copy of the
-  library and its types (`Fingerprint`, `StealthPlan`).
+- `seleniumbase-rs` comes by git on branch `main`, the same branch the plugin's
+  `stealth` feature tracks. The lockfiles hold one commit, so the app and the
+  plugin share one copy of the library and its types (`Fingerprint`, `StealthPlan`).
 - The permission the plugin's script needs, `sbrs-automation:default`, is in
   `capabilities/e2e/automation.json`. `build.rs` reads that folder only with the
   `e2e` feature, so other builds do not grant it.
