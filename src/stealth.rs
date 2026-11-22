@@ -49,7 +49,9 @@ pub use seleniumbase_rs::{Fingerprint, OsType, SeleniumBaseError};
 ///
 /// A `WebviewBuilder` (Tauri's `unstable` multi-webview API) takes the same
 /// script: `.initialization_script_for_all_frames(plan.init_script())`.
-pub trait StealthScriptExt: Sized {
+///
+/// This trait is sealed and cannot be implemented for types outside this crate.
+pub trait StealthScriptExt: private::WebviewBuilderTarget + Sized {
     /// Runs `plan`'s init script in every document of the webview, frames
     /// included, before any script of the page.
     #[must_use]
@@ -60,6 +62,14 @@ impl<R: Runtime, M: Manager<R>> StealthScriptExt for tauri::WebviewWindowBuilder
     fn stealth_script(self, plan: &StealthPlan) -> Self {
         self.initialization_script_for_all_frames(plan.init_script())
     }
+}
+
+mod private {
+    use super::*;
+
+    pub trait WebviewBuilderTarget {}
+
+    impl<R: Runtime, M: Manager<R>> WebviewBuilderTarget for tauri::WebviewWindowBuilder<'_, R, M> {}
 }
 
 /// The DevTools channel of one webview, inside the app's process, with
