@@ -3,7 +3,7 @@ name = "tauri-plugin-sbrs-automation"
 version = "0.1.0"
 description = "Drive a Tauri app's webview from seleniumbase-rs (sbrs) tests: a W3C WebDriver endpoint inside the app, on macOS, Windows and Linux"
 edition = "2024"
-rust-version = "1.99"
+rust-version = "1.100"
 license = "MIT"
 repository = "https://github.com/MustCodeAl/tauri-plugin-sbrs-automation"
 links = "tauri-plugin-sbrs-automation"
@@ -18,7 +18,7 @@ cdp = []
 # a fingerprint's init script on every runtime, and its overrides through the
 # in-process DevTools channel of CEF or WebView2 (no port, no listener), plus
 # the library's `Page` API over that channel. Brings the seleniumbase-rs
-# library from git, which needs Rust 1.99 (see the README).
+# library from git, which needs Rust 1.100 (see the README).
 stealth = ["dep:seleniumbase-rs"]
 
 [[test]]
