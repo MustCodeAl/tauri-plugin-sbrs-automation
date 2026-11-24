@@ -51,6 +51,118 @@
         </p>
       </section>
 
+      <!-- Multi-Account Concurrent Login Orchestrator -->
+      <section aria-labelledby="multi-login-heading" class="multi-login-section">
+        <div class="section-bar">
+          <div>
+            <h2 id="multi-login-heading">Multi-Account Login Orchestrator</h2>
+            <p class="muted">
+              Execute simultaneous authenticated sessions across isolated browser contexts with cryptographic separation and zero cookie leakage.
+            </p>
+          </div>
+          <div class="actions">
+            <button id="btn-add-persona" class="secondary" type="button">Add Persona</button>
+            <button id="btn-multi-login-launch" type="button">Launch Concurrent Sessions</button>
+          </div>
+        </div>
+
+        <div class="orchestrator-layout">
+          <!-- Configuration Panel -->
+          <div class="config-box">
+            <h3>Portal &amp; Authentication Targets</h3>
+            <div class="form-group">
+              <label for="ml-target-url">Login Portal URL</label>
+              <input id="ml-target-url" type="url" value="https://seleniumbase.io/simple/login" class="font-mono" />
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="ml-user-sel">Username Selector</label>
+                <input id="ml-user-sel" value="#username" class="font-mono" />
+              </div>
+              <div class="form-group">
+                <label for="ml-pass-sel">Password Selector</label>
+                <input id="ml-pass-sel" value="#password" class="font-mono" />
+              </div>
+              <div class="form-group">
+                <label for="ml-btn-sel">Submit Selector</label>
+                <input id="ml-btn-sel" value="#login-btn, button[type='submit']" class="font-mono" />
+              </div>
+            </div>
+
+            <h3 style="margin-top: 0.5rem;">Configured Personas</h3>
+            <table class="persona-table" aria-label="Account Personas">
+              <thead>
+                <tr>
+                  <th>Persona</th>
+                  <th>Role</th>
+                  <th>Username</th>
+                  <th>Engine / OS</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="ml-persona-tbody">
+                <!-- Dynamically populated or default personas -->
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Live Telemetry Deck -->
+          <div class="config-box">
+            <div class="section-bar" style="margin-bottom: 0.25rem;">
+              <h3>Live Session Telemetry</h3>
+              <span id="ml-active-count" class="muted font-mono">0 / 0 active</span>
+            </div>
+
+            <div id="ml-telemetry-deck" class="telemetry-deck">
+              <p id="ml-telemetry-empty" class="muted">Click "Launch Concurrent Sessions" to start isolated flows.</p>
+            </div>
+
+            <div id="ml-isolation-banner" class="isolation-banner" style="display: none;">
+              <span>Context Isolation: <strong>100% Verified</strong> (0 shared cookies across distinct context IDs)</span>
+              <button id="ml-btn-verify" class="secondary" style="padding: 0.2em 0.5em; font-size: 0.78rem;">Re-verify</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pairwise Cookie Isolation Verification Table & Telemetry Deck -->
+        <div id="ml-pairwise-section" class="pairwise-section" style="display: none;">
+          <div class="section-bar" style="margin-top: 1.25rem; margin-bottom: 0.5rem;">
+            <div>
+              <h3>Pairwise Cookie Isolation Verification Matrix</h3>
+              <p class="muted" style="margin: 0; font-size: 0.85rem;">
+                Cross-context token inspection computing jar intersection J_A ∩ J_B across all concurrent sessions.
+              </p>
+            </div>
+            <button id="ml-btn-pairwise-reverify" class="secondary" type="button">Run Pairwise Verification</button>
+          </div>
+
+          <table class="pairwise-table font-mono" aria-label="Pairwise Cookie Isolation Matrix">
+            <thead>
+              <tr>
+                <th style="width: 250px;">Persona Pair (A ↔ B)</th>
+                <th style="width: 220px;">Context IDs</th>
+                <th style="width: 140px;">Cookie Counts</th>
+                <th style="width: 160px;">Jar Intersection</th>
+                <th>Isolation Status</th>
+              </tr>
+            </thead>
+            <tbody id="ml-pairwise-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+
+          <!-- Context Cookie Jars Breakdown -->
+          <div class="section-bar" style="margin-top: 1.25rem; margin-bottom: 0.5rem;">
+            <h4>Isolated Context Cookie Jars</h4>
+            <span class="muted font-mono" style="font-size: 0.8rem;">Partition Policy: Strict Per-Context Ephemeral Jars</span>
+          </div>
+          <div id="ml-cookie-jars-grid" class="cookie-jars-grid font-mono">
+            <!-- Dynamically populated cards for Alice, Bob, Carol -->
+          </div>
+        </div>
+      </section>
+
       <section aria-labelledby="sessions-heading">
         <div class="section-bar">
           <h2 id="sessions-heading">Active sessions</h2>
