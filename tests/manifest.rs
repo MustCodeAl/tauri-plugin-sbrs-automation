@@ -45,8 +45,8 @@ fn the_cdp_feature_has_no_dependencies() {
 #[test]
 fn the_minimum_rust_version_is_the_newest_stable() {
     assert!(
-        MANIFEST.contains("rust-version = \"1.99\""),
-        "the plugin, the cdp feature included, needs the newest stable Rust, 1.99"
+        MANIFEST.contains("rust-version = \"1.100\""),
+        "the plugin, the cdp feature included, needs the newest stable Rust, 1.100"
     );
 }
 
