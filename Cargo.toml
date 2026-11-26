@@ -19,7 +19,7 @@ cdp = []
 # in-process DevTools channel of CEF or WebView2 (no port, no listener), plus
 # the library's `Page` API over that channel. Brings the seleniumbase-rs
 # library from git, which needs Rust 1.100 (see the README).
-stealth = ["dep:seleniumbase-rs"]
+stealth = ["dep:seleniumbase-rs", "dep:seleniumbase-rs-evasion"]
 
 [[test]]
 name = "cdp_env"
@@ -32,9 +32,10 @@ tauri = { version = "=3.0.0-alpha.5", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny_http = "0.12"
-# Feature `stealth` only. Pinned to a release tag: the plugin and the app must agree
-# on the library's types (`StealthPlan`, `Page`), so bump it deliberately.
-seleniumbase-rs = { git = "https://github.com/MustCodeAl/seleniumbase-rs", branch = "main", default-features = false, optional = true }
+# Feature `stealth` only. Plain git URLs so Cargo unifies `seleniumbase-rs` across
+# the plugin, `seleniumbase-rs-evasion`, and any app that depends on them.
+seleniumbase-rs = { git = "https://github.com/MustCodeAl/seleniumbase-rs", default-features = false, optional = true }
+seleniumbase-rs-evasion = { git = "https://github.com/MustCodeAl/seleniumbase-rs-stealth", optional = true }
 
 [build-dependencies]
 tauri-plugin = { version = "=3.0.0-alpha.4", features = ["build"] }

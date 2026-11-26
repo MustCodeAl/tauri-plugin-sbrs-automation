@@ -2,8 +2,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use seleniumbase_rs::profile_payloads::ProfileParams;
 use seleniumbase_rs::{Browser, DriverMode};
+use seleniumbase_rs_evasion::profile_payloads::ProfileParams;
 
 /// Common API status wrapper.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -120,7 +120,7 @@ pub struct Profile {
     pub external_profile: Option<ProfileParams>,
     /// Custom masking / anti-fingerprint settings for this profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fingerprint: Option<seleniumbase_rs::Fingerprint>,
+    pub fingerprint: Option<seleniumbase_rs_evasion::Fingerprint>,
 }
 
 impl fmt::Debug for Profile {
@@ -218,7 +218,7 @@ pub struct NewProfile {
     pub external_profile: Option<ProfileParams>,
     /// Custom masking / anti-fingerprint settings (partial payloads allowed).
     #[serde(default)]
-    pub fingerprint: Option<seleniumbase_rs::Fingerprint>,
+    pub fingerprint: Option<seleniumbase_rs_evasion::Fingerprint>,
 }
 
 /// Information returned after launching a profile.
@@ -265,7 +265,7 @@ impl fmt::Debug for BrowserCookie {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct RandomizeRequest {
     /// The operating system the identity claims. Defaults to this machine's.
-    pub os: Option<seleniumbase_rs::OsType>,
+    pub os: Option<seleniumbase_rs_evasion::OsType>,
     /// Makes the identity reproducible: the same operating system and seed
     /// give the same identity. Defaults to a fresh random seed.
     pub seed: Option<u64>,
@@ -275,7 +275,7 @@ pub struct RandomizeRequest {
 #[derive(Clone, Debug, Serialize)]
 pub struct Randomized {
     /// The operating system the identity claims.
-    pub os: seleniumbase_rs::OsType,
+    pub os: seleniumbase_rs_evasion::OsType,
     /// The seed that produced it. Pass it back to get the same identity again.
     pub seed: u64,
     /// The profile, with its new fingerprint.

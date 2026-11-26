@@ -16,7 +16,7 @@ mod store;
 
 use app_window::ProfileWindow;
 use models::{NewProfile, Profile, RandomizeRequest, Randomized, SessionInfo, StorageStatus};
-use seleniumbase_rs::OsType;
+use seleniumbase_rs_evasion::OsType;
 use session::Session;
 use store::{AppState, next_api_port};
 
@@ -146,11 +146,8 @@ where
     // A profile with no fingerprint gets one drawn for this machine's
     // system and saved first, as `Randomize` does, so the window never shows
     // the real browser and the profile keeps the same identity next time.
-    let profile = if store::build_config(&profile)
-        .map_err(|error| error.to_string())?
-        .fingerprint
-        .is_some()
-    {
+    let _ = store::build_config(&profile).map_err(|error| error.to_string())?;
+    let profile = if store::resolve_fingerprint(&profile).is_some() {
         profile
     } else {
         let randomized = state

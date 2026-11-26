@@ -37,10 +37,11 @@ tauri-plugin-opener = "=3.0.0-alpha.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# `turso` provides `storage::ProfileVault`, the encrypted profile store. The
-# same branch as the plugin's, so the app and the plugin share one copy of the
-# library and its types.
-seleniumbase-rs = { git = "https://github.com/MustCodeAl/seleniumbase-rs", branch = "main", features = ["turso"] }
+# `turso` provides `storage::ProfileVault`, the encrypted profile store. Plain
+# git URLs match `seleniumbase-rs-evasion` and the plugin so Cargo unifies all
+# copies of `seleniumbase-rs` to one commit.
+seleniumbase-rs = { git = "https://github.com/MustCodeAl/seleniumbase-rs", features = ["turso"] }
+seleniumbase-rs-evasion = { git = "https://github.com/MustCodeAl/seleniumbase-rs-stealth" }
 tokio = { version = "1", features = ["rt-multi-thread", "fs", "net"] }
 uuid = { version = "1", features = ["v4"] }
 actix-web = "4"
@@ -66,7 +67,7 @@ tauri-plugin-sbrs-automation = { path = "../../..", features = ["stealth"] }
 [dev-dependencies]
 # `test-util` adds `sb_cdp::Browser::new_mocked`, so Pure CDP sessions can be
 # tested without launching Chrome.
-seleniumbase-rs = { git = "https://github.com/MustCodeAl/seleniumbase-rs", branch = "main", features = ["turso", "test-util"] }
+seleniumbase-rs = { git = "https://github.com/MustCodeAl/seleniumbase-rs", features = ["turso", "test-util"] }
 tempfile = "3"
 tokio = { version = "1", features = ["macros"] }
 

@@ -31,7 +31,7 @@ use tauri::{
 use tauri_plugin_sbrs_automation::stealth::StealthPlan;
 
 use crate::models::Profile;
-use crate::store::build_config;
+use crate::store::{build_config, resolve_fingerprint};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use tauri::Webview;
@@ -254,7 +254,7 @@ impl ProfileWindow {
         let url = start_url(url)?;
         let label = window_label(&profile.id)?;
         let config = build_config(profile).map_err(|error| error.to_string())?;
-        let fingerprint = config.fingerprint.ok_or_else(|| {
+        let fingerprint = resolve_fingerprint(profile).ok_or_else(|| {
             format!(
                 "\"{}\" has no fingerprint to open with: randomize it or set one first",
                 profile.name

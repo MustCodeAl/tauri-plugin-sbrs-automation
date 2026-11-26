@@ -40,10 +40,12 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use serde_json::{Value, json};
 use tauri::{Manager, Runtime};
 
+pub use seleniumbase_rs::SeleniumBaseError;
 pub use seleniumbase_rs::sb_cdp::{
-    Browser, CdpInbox, CdpRequest, CdpTransport, Page, StealthPlan, TransportError,
+    Browser, CdpInbox, CdpRequest, CdpTransport, Page, TransportError,
 };
-pub use seleniumbase_rs::{Fingerprint, OsType, SeleniumBaseError};
+pub use seleniumbase_rs_evasion::identity::StealthPlan;
+pub use seleniumbase_rs_evasion::{Fingerprint, OsType};
 
 /// Adds a [`StealthPlan`]'s init script to a webview window while it is built.
 ///

@@ -743,6 +743,7 @@ fn parse_legacy(file: &LegacyFile) -> Result<Vec<LegacyDoc>, MigrationError> {
             .kind
             .normalize(&raw)
             .ok_or(MigrationError::BadItem { file: name, index })?;
+        let raw = canonicalize_legacy_aliases(file.kind, raw);
         let doc = LegacyDoc {
             id,
             raw,
@@ -754,6 +755,25 @@ fn parse_legacy(file: &LegacyFile) -> Result<Vec<LegacyDoc>, MigrationError> {
         }
     }
     Ok(docs)
+}
+
+/// Normalizes known enum casing aliases that earlier clear-text files wrote
+/// before `seleniumbase_rs::DriverMode` serialized lowercase (`"WebDriver"` ->
+/// `"webdriver"`, `"Cdp"` -> `"cdp"`, `"Uc"` -> `"uc"`), without touching any
+/// other field so unknown or dropped fields still fail verification.
+fn canonicalize_legacy_aliases(kind: Kind, mut raw: Value) -> Value {
+    if kind == Kind::Profiles
+        && let Some(mode) = raw.get_mut("mode")
+        && let Some(canonical) = match mode.as_str() {
+            Some("WebDriver") => Some("webdriver"),
+            Some("Cdp") => Some("cdp"),
+            Some("Uc") => Some("uc"),
+            _ => None,
+        }
+    {
+        *mode = Value::String(canonical.to_owned());
+    }
+    raw
 }
 
 /// Whether `stored` holds everything `legacy` says.

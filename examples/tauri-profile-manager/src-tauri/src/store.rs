@@ -4,7 +4,8 @@ use std::fmt;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use seleniumbase_rs::{BrowserConfig, Fingerprint, OsType, SeleniumBaseError};
+use seleniumbase_rs::{BrowserConfig, SeleniumBaseError};
+use seleniumbase_rs_evasion::{Fingerprint, OsType};
 
 use crate::models::{
     Engine, Folder, Profile, RandomizeRequest, Randomized, SessionInfo, StorageStatus, Tag,
@@ -355,7 +356,7 @@ pub(crate) fn default_profiles() -> Vec<Profile> {
 ///
 /// [`SeleniumBaseError`] when the configuration is refused.
 pub fn build_config(profile: &Profile) -> Result<BrowserConfig, SeleniumBaseError> {
-    let mut builder = if let Some(params) = profile.external_profile.as_ref() {
+    let builder = if let Some(params) = profile.external_profile.as_ref() {
         params
             .to_browser_config(&profile.container_url)
             .into_builder()
@@ -376,14 +377,22 @@ pub fn build_config(profile: &Profile) -> Result<BrowserConfig, SeleniumBaseErro
         }
         builder
     };
-    if let Some(fingerprint) = &profile.fingerprint {
-        builder = builder.fingerprint(fingerprint.clone());
-    }
     let mut config = builder.build()?;
     if profile.external_profile.is_none() {
         config.session.auto_start_driver = false;
     }
     Ok(config)
+}
+
+/// The effective fingerprint a launch or app window of `profile` uses: the
+/// profile's own fingerprint, else the one converted from an imported profile.
+pub fn resolve_fingerprint(profile: &Profile) -> Option<Fingerprint> {
+    profile.fingerprint.clone().or_else(|| {
+        profile
+            .external_profile
+            .as_ref()
+            .map(seleniumbase_rs_evasion::profile_payloads::ProfileParams::to_fingerprint)
+    })
 }
 
 pub fn next_api_port() -> u16 {

@@ -19,9 +19,10 @@ use seleniumbase_rs::sb_cdp::{
     SameSite,
 };
 use seleniumbase_rs::{BaseCase, BrowserConfig};
+use seleniumbase_rs_evasion::identity::{PageFingerprintExt, StealthPlan};
 
 use crate::models::{BrowserCookie, Engine, Profile};
-use crate::store::build_config;
+use crate::store::{build_config, resolve_fingerprint};
 
 /// Where screenshots go, relative to the working directory.
 const LOGS_DIR: &str = "latest_logs";
@@ -215,6 +216,15 @@ async fn prepare_webdriver(
 }
 
 async fn apply_webdriver_overrides(sb: &mut BaseCase, profile: &Profile) -> Result<(), String> {
+    if let Some(fingerprint) = resolve_fingerprint(profile) {
+        let plan = StealthPlan::new(&fingerprint);
+        for (method, params) in plan.commands() {
+            sb.execute_cdp_with_params(method, params.clone())
+                .await
+                .map_err(|e| format!("Failed to apply fingerprint command {method}: {e}"))?;
+        }
+    }
+
     if let Some((latitude, longitude, accuracy)) = geolocation(profile) {
         set_webdriver_geolocation(sb, latitude, longitude, accuracy)
             .await
@@ -311,7 +321,8 @@ pub struct PureCdpSession {
 impl PureCdpSession {
     async fn launch(profile: &Profile, start_url: Option<&str>) -> Result<Self, LaunchError> {
         let config = build_config(profile).map_err(|error| at(Stage::Launch, error.to_string()))?;
-        let options = launch_options(&config).map_err(|message| at(Stage::Launch, message))?;
+        let options =
+            launch_options(profile, &config).map_err(|message| at(Stage::Launch, message))?;
         let browser = CdpBrowser::launch(options)
             .await
             .map_err(|e| at(Stage::Launch, e.to_string()))?;
@@ -420,7 +431,7 @@ impl PureCdpSession {
 ///
 /// The proxy is not set here. It goes to the profile's browser context
 /// instead, so its password is answered for that context's tabs only.
-fn launch_options(config: &BrowserConfig) -> Result<LaunchOptions, String> {
+fn launch_options(profile: &Profile, config: &BrowserConfig) -> Result<LaunchOptions, String> {
     let mut builder = LaunchOptions::builder().headless(config.browser.headless);
     if let Some(user_agent) = &config.browser.user_agent {
         builder = builder.user_agent(user_agent.as_str());
@@ -428,10 +439,8 @@ fn launch_options(config: &BrowserConfig) -> Result<LaunchOptions, String> {
     if let Some(locale) = &config.browser.lang {
         builder = builder.lang(locale.as_str());
     }
-    if let Some((width, height)) = config
-        .fingerprint
-        .as_ref()
-        .and_then(|fp| fp.screen().value())
+    if let Some((width, height)) = resolve_fingerprint(profile)
+        .and_then(|fp| fp.screen().value().copied())
         .map(|screen| (screen.width, screen.height))
     {
         builder = builder.window_size(width, height);
@@ -485,8 +494,8 @@ async fn apply_identity(
     profile: &Profile,
     config: &BrowserConfig,
 ) -> Result<(), String> {
-    let fingerprint = config.fingerprint.as_ref();
-    if let Some(fingerprint) = fingerprint {
+    let fingerprint = resolve_fingerprint(profile);
+    if let Some(fingerprint) = fingerprint.as_ref() {
         // The script, the overrides and the permission grant for this tab's own
         // context, without the proxy login a header would hand to every site.
         page.apply_fingerprint(fingerprint)
@@ -496,12 +505,11 @@ async fn apply_identity(
 
     // A second locale override on the same tab can be refused, so only set one
     // when the fingerprint did not.
-    if let Some(locale) = config
-        .browser
-        .lang
-        .as_deref()
-        .filter(|_| fingerprint.is_none_or(|fp| fp.locale().is_natural()))
-    {
+    if let Some(locale) = config.browser.lang.as_deref().filter(|_| {
+        fingerprint
+            .as_ref()
+            .is_none_or(|fp| fp.locale().is_natural())
+    }) {
         page.emulation()
             .locale(locale)
             .await
@@ -606,9 +614,9 @@ fn to_cdp_cookie(cookie: &BrowserCookie) -> Cookie {
 
 #[cfg(test)]
 mod tests {
-    use seleniumbase_rs::evasion::evasions::session_script;
     use seleniumbase_rs::sb_cdp::MockCtrl;
-    use seleniumbase_rs::{Fingerprint, OsType, ProxyConfig};
+    use seleniumbase_rs_evasion::evasions::session_script;
+    use seleniumbase_rs_evasion::{Fingerprint, OsType, ProxyConfig};
 
     use super::*;
 
@@ -1066,7 +1074,7 @@ mod tests {
             "proxy": format!("http://alice:{FAKE_PROXY_PASSWORD}@proxy.example:8080"),
         }));
 
-        let options = launch_options(&build_config(&profile).unwrap()).unwrap();
+        let options = launch_options(&profile, &build_config(&profile).unwrap()).unwrap();
 
         assert!(options.is_headless());
         assert!(
@@ -1079,7 +1087,7 @@ mod tests {
     fn a_headed_profile_launches_headed() {
         let profile = pure_cdp_profile(json!({ "headless": false }));
 
-        let options = launch_options(&build_config(&profile).unwrap()).unwrap();
+        let options = launch_options(&profile, &build_config(&profile).unwrap()).unwrap();
 
         assert!(!options.is_headless());
     }

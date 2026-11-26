@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tracing::info;
 use uuid::Uuid;
 
-use seleniumbase_rs::profile_payloads::ProfileParams;
+use seleniumbase_rs_evasion::profile_payloads::ProfileParams;
 
 use crate::models::*;
 use crate::session::{LaunchError, Session};
@@ -444,7 +444,7 @@ async fn profile_update(
         if v.is_null() {
             profile.fingerprint = None;
         } else {
-            match serde_json::from_value::<seleniumbase_rs::Fingerprint>(v.clone()) {
+            match serde_json::from_value::<seleniumbase_rs_evasion::Fingerprint>(v.clone()) {
                 Ok(fp) => profile.fingerprint = Some(fp),
                 Err(e) => {
                     return err(400, format!("Invalid fingerprint payload: {e}"));
@@ -453,7 +453,7 @@ async fn profile_update(
         }
     }
     if payload.get("parameters").is_some() {
-        match serde_json::from_value::<seleniumbase_rs::profile_payloads::ProfileParams>(
+        match serde_json::from_value::<seleniumbase_rs_evasion::profile_payloads::ProfileParams>(
             payload.get("parameters").cloned().unwrap_or_default(),
         ) {
             Ok(params) => profile.external_profile = Some(params),
