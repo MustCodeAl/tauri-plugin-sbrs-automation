@@ -44,8 +44,8 @@ pub use seleniumbase_rs::SeleniumBaseError;
 pub use seleniumbase_rs::sb_cdp::{
     Browser, CdpInbox, CdpRequest, CdpTransport, Page, TransportError,
 };
-pub use seleniumbase_rs_evasion::identity::StealthPlan;
-pub use seleniumbase_rs_evasion::{Fingerprint, OsType};
+pub use seleniumbase_rs_stealth::client::StealthPlan;
+pub use seleniumbase_rs_stealth::identity::{Fingerprint, OsType};
 
 /// Adds a [`StealthPlan`]'s init script to a webview window while it is built.
 ///

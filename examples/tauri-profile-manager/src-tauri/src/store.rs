@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use seleniumbase_rs::{BrowserConfig, SeleniumBaseError};
-use seleniumbase_rs_evasion::{Fingerprint, OsType};
+use seleniumbase_rs_stealth::identity::{Fingerprint, OsType};
 
 use crate::models::{
     Engine, Folder, Profile, RandomizeRequest, Randomized, SessionInfo, StorageStatus, Tag,
@@ -391,7 +391,7 @@ pub fn resolve_fingerprint(profile: &Profile) -> Option<Fingerprint> {
         profile
             .external_profile
             .as_ref()
-            .map(seleniumbase_rs_evasion::profile_payloads::ProfileParams::to_fingerprint)
+            .map(seleniumbase_rs_stealth::identity::profile_payloads::ProfileParams::to_fingerprint)
     })
 }
 

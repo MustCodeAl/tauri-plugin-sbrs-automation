@@ -22,15 +22,23 @@ fn seleniumbase_rs_is_only_an_optional_dependency_of_the_stealth_feature() {
         dependency.contains("git = \"https://github.com/MustCodeAl/seleniumbase-rs\""),
         "tracks seleniumbase-rs main via plain git URL: {dependency}"
     );
-    let evasion_dep = MANIFEST
+    let stealth_dep = MANIFEST
         .lines()
         .map(str::trim_start)
-        .find(|line| line.starts_with("seleniumbase-rs-evasion") && line.contains('='))
-        .expect("the stealth feature's evasion dependency");
-    assert!(evasion_dep.contains("optional = true"), "{evasion_dep}");
+        .find(|line| line.starts_with("seleniumbase-rs-stealth") && line.contains('='))
+        .expect("the stealth feature's stealth dependency");
+    assert!(stealth_dep.contains("optional = true"), "{stealth_dep}");
     assert!(
-        evasion_dep.contains("git = \"https://github.com/MustCodeAl/seleniumbase-rs-stealth\""),
-        "tracks seleniumbase-rs-stealth main via plain git URL: {evasion_dep}"
+        stealth_dep.contains("default-features = false"),
+        "{stealth_dep}"
+    );
+    assert!(
+        stealth_dep.contains("features = [\"client\"]"),
+        "{stealth_dep}"
+    );
+    assert!(
+        stealth_dep.contains("git = \"https://github.com/MustCodeAl/seleniumbase-rs-stealth\""),
+        "tracks seleniumbase-rs-stealth main via plain git URL: {stealth_dep}"
     );
     let feature = MANIFEST
         .lines()
@@ -38,7 +46,7 @@ fn seleniumbase_rs_is_only_an_optional_dependency_of_the_stealth_feature() {
         .find(|line| line.starts_with("stealth ="));
     assert_eq!(
         feature,
-        Some(r#"stealth = ["dep:seleniumbase-rs", "dep:seleniumbase-rs-evasion"]"#)
+        Some(r#"stealth = ["dep:seleniumbase-rs", "dep:seleniumbase-rs-stealth"]"#)
     );
     assert!(
         MANIFEST.lines().any(|line| line.trim() == "default = []"),
@@ -92,8 +100,8 @@ fn the_example_resolves_seleniumbase_rs_to_the_plugins_commit() {
         [core_url, core_url],
         "a dependency and a dev-dependency"
     );
-    assert_eq!(git_urls(MANIFEST, "seleniumbase-rs-evasion"), [stealth_url]);
-    assert_eq!(git_urls(EXAMPLE, "seleniumbase-rs-evasion"), [stealth_url]);
+    assert_eq!(git_urls(MANIFEST, "seleniumbase-rs-stealth"), [stealth_url]);
+    assert_eq!(git_urls(EXAMPLE, "seleniumbase-rs-stealth"), [stealth_url]);
     assert!(
         EXAMPLE.contains("tauri-plugin-sbrs-automation = { path = \"../../..\""),
         "the example builds against this checkout of the plugin"
@@ -108,9 +116,9 @@ fn the_example_resolves_seleniumbase_rs_to_the_plugins_commit() {
         "the plugin and the example must resolve seleniumbase-rs to one commit"
     );
     assert_eq!(
-        package_source(PLUGIN_LOCK, "seleniumbase-rs-evasion"),
-        package_source(EXAMPLE_LOCK, "seleniumbase-rs-evasion"),
-        "the plugin and the example must resolve seleniumbase-rs-evasion to one commit"
+        package_source(PLUGIN_LOCK, "seleniumbase-rs-stealth"),
+        package_source(EXAMPLE_LOCK, "seleniumbase-rs-stealth"),
+        "the plugin and the example must resolve seleniumbase-rs-stealth to one commit"
     );
 }
 

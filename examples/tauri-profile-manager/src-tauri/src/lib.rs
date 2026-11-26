@@ -16,7 +16,7 @@ mod store;
 
 use app_window::ProfileWindow;
 use models::{NewProfile, Profile, RandomizeRequest, Randomized, SessionInfo, StorageStatus};
-use seleniumbase_rs_evasion::OsType;
+use seleniumbase_rs_stealth::identity::OsType;
 use session::Session;
 use store::{AppState, next_api_port};
 

@@ -19,7 +19,7 @@ use seleniumbase_rs::sb_cdp::{
     SameSite,
 };
 use seleniumbase_rs::{BaseCase, BrowserConfig};
-use seleniumbase_rs_evasion::identity::{PageFingerprintExt, StealthPlan};
+use seleniumbase_rs_stealth::client::{PageFingerprintExt, StealthPlan};
 
 use crate::models::{BrowserCookie, Engine, Profile};
 use crate::store::{build_config, resolve_fingerprint};
@@ -615,8 +615,8 @@ fn to_cdp_cookie(cookie: &BrowserCookie) -> Cookie {
 #[cfg(test)]
 mod tests {
     use seleniumbase_rs::sb_cdp::MockCtrl;
-    use seleniumbase_rs_evasion::evasions::session_script;
-    use seleniumbase_rs_evasion::{Fingerprint, OsType, ProxyConfig};
+    use seleniumbase_rs_stealth::client::evasions::session_script;
+    use seleniumbase_rs_stealth::identity::{Fingerprint, OsType, ProxyConfig};
 
     use super::*;
 

@@ -38,10 +38,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # `turso` provides `storage::ProfileVault`, the encrypted profile store. Plain
-# git URLs match `seleniumbase-rs-evasion` and the plugin so Cargo unifies all
+# git URLs match `seleniumbase-rs-stealth` and the plugin so Cargo unifies all
 # copies of `seleniumbase-rs` to one commit.
 seleniumbase-rs = { git = "https://github.com/MustCodeAl/seleniumbase-rs", features = ["turso"] }
-seleniumbase-rs-evasion = { git = "https://github.com/MustCodeAl/seleniumbase-rs-stealth" }
+seleniumbase-rs-stealth = { git = "https://github.com/MustCodeAl/seleniumbase-rs-stealth", default-features = false, features = ["client"] }
 tokio = { version = "1", features = ["rt-multi-thread", "fs", "net"] }
 uuid = { version = "1", features = ["v4"] }
 actix-web = "4"
