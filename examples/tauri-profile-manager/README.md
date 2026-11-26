@@ -118,7 +118,7 @@ VNC password is `secret` by default.
 
 ## Start the Tauri app
 
-Needs Rust 1.99 or newer, the version `seleniumbase-rs` requires (Tauri 3
+Needs Rust 1.100 or newer, the version `seleniumbase-rs` requires (Tauri 3
 needs 1.95), and Node LTS (`brew install node`, `winget install
 OpenJS.NodeJS.LTS`). The app runs on CEF (`tauri-runtime-cef`) on every
 desktop, not on the system webview: the first build needs CMake and Ninja and
@@ -169,8 +169,8 @@ and typing are DOM events, so the mouse and keyboard stay yours. Ports 4545 and
 - `Cargo.toml` takes the plugin from this repository (`path = "../../.."`);
   an app of your own takes it by `git`. The plugin is always built in, for
   its `stealth` feature; the `e2e` feature only registers `init()`.
-- `seleniumbase-rs` comes by git at the `v0.8.6` tag, the one the plugin's
-  `stealth` feature pins, so the app and the plugin share one copy of the
+- `seleniumbase-rs` comes by git from the `main` branch, the one the plugin's
+  `stealth` feature tracks, so the app and the plugin share one copy of the
   library and its types (`Fingerprint`, `StealthPlan`).
 - The permission the plugin's script needs, `sbrs-automation:default`, is in
   `capabilities/e2e/automation.json`. `build.rs` reads that folder only with the

@@ -209,9 +209,9 @@ webview's own channels, inside the app's process.
 tauri-plugin-sbrs-automation = { git = "https://github.com/MustCodeAl/tauri-plugin-sbrs-automation", features = ["stealth"] }
 ```
 
-The feature brings the seleniumbase-rs library (from git, pinned to the `v0.8.6` tag,
-about 90 packages). The whole plugin needs **Rust 1.99**, the library's minimum
-and the newest stable. A git dependency also keeps the plugin off crates.io.
+The feature brings the seleniumbase-rs library (from git, tracking `main`; the
+lockfile holds the commit, about 90 packages). The whole plugin needs **Rust 1.100**,
+the library's minimum and the newest stable. A git dependency also keeps the plugin off crates.io.
 
 A fingerprint's `StealthPlan` has two parts, and each webview takes what it
 can:

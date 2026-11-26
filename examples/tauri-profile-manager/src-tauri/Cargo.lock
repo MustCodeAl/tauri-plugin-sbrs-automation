@@ -5515,8 +5515,8 @@ dependencies = [
 
 [[package]]
 name = "seleniumbase-rs"
-version = "0.8.6"
-source = "git+https://github.com/MustCodeAl/seleniumbase-rs?tag=v0.8.6#d935c4e660b8660ad5329fa6597764aee85f7742"
+version = "0.8.0"
+source = "git+https://github.com/MustCodeAl/seleniumbase-rs?branch=main#ab7f2b55cd820ed840016939cded3bee442222a2"
 dependencies = [
  "anstream 0.6.21",
  "async-trait",
