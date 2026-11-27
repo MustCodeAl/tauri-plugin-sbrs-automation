@@ -41,6 +41,10 @@ wildcards = "warn"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# Feature `stealth` brings the seleniumbase-rs library from its own repository, pinned to a
-# release tag, until it is published on crates.io.
-allow-git = ["https://github.com/MustCodeAl/seleniumbase-rs"]
+# Feature `stealth` brings `seleniumbase-rs-stealth`, `seleniumbase-rs`, and its transitive
+# `seleniumbase-rs-plugins` API from their repositories until published on crates.io.
+allow-git = [
+    "https://github.com/MustCodeAl/seleniumbase-rs",
+    "https://github.com/MustCodeAl/seleniumbase-rs-stealth",
+    "https://github.com/MustCodeAl/seleniumbase-rs-plugins",
+]
