@@ -1,0 +1,2 @@
+# Both the edition and formatting style use Rust 2024.
+style_edition = "2024"

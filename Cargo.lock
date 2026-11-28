@@ -542,7 +542,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 2.0.119",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -3079,9 +3079,9 @@ dependencies = [
 
 [[package]]
 name = "tauri"
-version = "3.0.0-alpha.5"
+version = "3.0.0-alpha.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5a9b34042b264a9ecd402aa8aa3e825a4c95e77097a45b0737e02d86509c43b"
+checksum = "4b0cad7bd420aa41bdf7beab9a95e02d83c4cab1cb6f7b94fe4fd1e0c605feaa"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3215,7 +3215,6 @@ dependencies = [
  "objc2-web-kit",
  "seleniumbase-rs",
  "seleniumbase-rs-stealth",
- "serde",
  "serde_json",
  "sha2",
  "tauri",
@@ -3226,9 +3225,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-runtime"
-version = "3.0.0-alpha.4"
+version = "3.0.0-alpha.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37d33186aff00f285828a7d1a63ac040c2384e6b63a3f1c1d2c4aac492cc0a10"
+checksum = "ade3281587f58a4878192946ae2007ce03cb6d208d082e1350c5ec95554596f3"
 dependencies = [
  "cookie",
  "dpi",

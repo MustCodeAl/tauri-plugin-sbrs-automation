@@ -191,7 +191,7 @@ pub mod cef {
     //! `allocate_devtools_message_id`. The bridge numbers each command with
     //! one, and takes only the results of the ids it allocated.
     //!
-    //! This plugin pins Tauri `3.0.0-alpha.4` and builds without a runtime,
+    //! This plugin pins Tauri `3.0.0-alpha.6` and builds without a runtime,
     //! so it cannot name `tauri-runtime-cef`'s types; the app joins the two
     //! with a few lines. With `tauri-runtime-cef` 3.0.0-alpha.6 (Tauri
     //! 3.0.0-alpha.5 or later), whose DevTools API is documented, and not
